@@ -29,7 +29,12 @@ internal static class Wallpaper
     {
         Directory.CreateDirectory(WallpaperDir);
         string copy = Path.Combine(WallpaperDir, Path.GetFileName(floorPath));
-        File.Copy(floorPath, copy, true);
+        // File.Copy keeps the source's write time, so an equal copy is left alone: rewriting the same files on
+        // every click is the burst of modifications that ransomware protection counts.
+        var source = new FileInfo(floorPath);
+        var existing = new FileInfo(copy);
+        if (!existing.Exists || existing.Length != source.Length || existing.LastWriteTimeUtc != source.LastWriteTimeUtc)
+            File.Copy(floorPath, copy, true);
 
         string? current = Current();
         bool alreadyOurs = current != null && current.StartsWith(WallpaperDir, StringComparison.OrdinalIgnoreCase);

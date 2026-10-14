@@ -161,19 +161,27 @@ internal sealed class SettingsForm : Form
         else dispose();
     }
 
+    // Only the decoding runs in parallel; the cache files are written one at a time.
     private void PrepareThumbnails(IEnumerable<string> paths)
     {
         string[] missing = paths.Distinct().Where(p => !_thumbs.ContainsKey(p)).ToArray();
-        var made = new Image[missing.Length];
-        Parallel.For(0, missing.Length, i => made[i] = Assets.Thumbnail(missing[i]));
-        for (int i = 0; i < missing.Length; i++) _thumbs[missing[i]] = made[i];
+        var made = new Bitmap[missing.Length];
+        var fresh = new bool[missing.Length];
+        Parallel.For(0, missing.Length, i => made[i] = Assets.Thumbnail(missing[i], out fresh[i]));
+        for (int i = 0; i < missing.Length; i++)
+        {
+            if (fresh[i]) Assets.StoreThumbnail(missing[i], made[i]);
+            _thumbs[missing[i]] = made[i];
+        }
     }
 
     private Image Thumbnail(string path)
     {
         if (!_thumbs.TryGetValue(path, out Image? image))
         {
-            image = Assets.Thumbnail(path);
+            var bitmap = Assets.Thumbnail(path, out bool fresh);
+            if (fresh) Assets.StoreThumbnail(path, bitmap);
+            image = bitmap;
             _thumbs[path] = image;
         }
         return image;

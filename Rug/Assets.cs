@@ -83,10 +83,12 @@ internal static class Assets
         };
     }
 
-    // Decoding a 5000 px picture takes about 120 ms, so each thumbnail is kept as a lossless PNG next to the
-    // settings; the cached pixels are identical to a fresh one. The name changes when the picture changes.
-    public static Bitmap Thumbnail(string path, int width = 100, int height = 68)
+    // Decoding a 5000 px picture takes about 120 ms (measured 2026-10-14), so each thumbnail is kept as a
+    // lossless PNG; a cached one has the same pixels as a fresh one. The name changes when the picture changes.
+    // fresh is true when the picture was decoded now and the result belongs in the cache.
+    public static Bitmap Thumbnail(string path, out bool fresh, int width = 100, int height = 68)
     {
+        fresh = false;
         string? cached = ThumbnailCachePath(path, width, height);
         if (cached != null && File.Exists(cached))
         {
@@ -97,7 +99,7 @@ internal static class Assets
             }
             catch (Exception)
             {
-                // A damaged cache file is rebuilt below.
+                // A damaged cache file is decoded again and overwritten.
             }
         }
 
@@ -116,8 +118,25 @@ internal static class Assets
         {
             return bmp;
         }
-        if (cached != null) TrySave(bmp, cached);
+        fresh = cached != null;
         return bmp;
+    }
+
+    // Written straight under its final name. On 2026-10-14 Trend Micro's ransomware protection stopped Rug
+    // when it wrote a randomly named .tmp file and renamed it over the .png, the way ransomware replaces a file.
+    public static void StoreThumbnail(string path, Bitmap bmp, int width = 100, int height = 68)
+    {
+        string? target = ThumbnailCachePath(path, width, height);
+        if (target == null) return;
+        try
+        {
+            Directory.CreateDirectory(ThumbnailDir);
+            bmp.Save(target, ImageFormat.Png);
+        }
+        catch (Exception)
+        {
+            // Without the cache the next start decodes the picture again.
+        }
     }
 
     private static string? ThumbnailCachePath(string path, int width, int height)
@@ -136,18 +155,4 @@ internal static class Assets
         }
     }
 
-    private static void TrySave(Bitmap bmp, string target)
-    {
-        try
-        {
-            Directory.CreateDirectory(ThumbnailDir);
-            string temp = target + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            bmp.Save(temp, ImageFormat.Png);
-            File.Move(temp, target, true);
-        }
-        catch (Exception)
-        {
-            // Without the cache the next start decodes the picture again.
-        }
-    }
 }
