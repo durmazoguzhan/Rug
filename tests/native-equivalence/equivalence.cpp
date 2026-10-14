@@ -1,10 +1,12 @@
 // Drives two builds of rug_native.dll with the same scripted input.
 //   exact: every frame must be bit-identical (pixels, pose, bounds, corners, hit tests). Run it against a
 //          candidate built with RUG_EXACT_STEPS, which keeps every skip except the sleep threshold.
-//   sleep: the cloth rests on icon bumps for 50 s. The sleeping candidate shows one fixed frame, so over the
-//          last 20 s it is compared with every reference frame, next to the reference's own first frame of that
-//          window compared the same way: a frozen frame passes when it is no further from the original than the
-//          original is from itself.
+//   sleep: the cloth rests on icon bumps for 50 s after the first drop, after Center and after an Alt press (the
+//          last two drop it at the screen centre). The sleeping candidate shows one fixed frame. It passes when
+//          it was asleep before the last 20 s and every pixel of it lies within kRangeSlack levels of the lowest
+//          and highest value the original showed at that pixel during those 20 s. A single reference frame is no
+//          yardstick here, since after a drop at the centre the original trembles by up to 20 levels from one
+//          frame to the next.
 // Usage: equivalence.exe exact|sleep <reference dll> <candidate dll> <rug picture> <second rug picture>
 #define NOMINMAX
 #include <windows.h>
@@ -22,6 +24,9 @@ namespace {
 constexpr int kWidth = 1920;
 constexpr int kHeight = 1200;
 constexpr float kFrameSeconds = 1.0f / 32.0f;
+// The original keeps settling very slowly for minutes, so any frozen frame lands slightly outside the range the
+// original shows later: measured 2026-10-14, up to 2 levels in at most 238 pixels. 2 levels is the accepted limit.
+constexpr int kRangeSlack = 2;
 
 struct Api {
     HMODULE module = nullptr;
@@ -157,18 +162,12 @@ void Idle(Side& ref, Side& cand, int frames, const char* phase) {
 
 }
 
-int RestScenario(Side& ref, Side& cand) {
-    // The user's desktop: three columns of icons and one icon under the dropped rug.
-    std::vector<float> bumps;
-    for (int col = 0; col < 3; ++col)
-        for (int row = 0; row < 8; ++row)
-            bumps.insert(bumps.end(), { 47.0f + 95.0f * col, kHeight - (37.0f + 125.0f * row), 30.08f, 30.08f, 22.0f });
-    bumps.insert(bumps.end(), { 712.0f, kHeight - 412.0f, 30.08f, 30.08f, 22.0f });
-    Both(ref, cand, [&](Api& a) { a.set_bumps(bumps.data(), int(bumps.size() / 5)); });
-
+// 50 s of rest after whatever the caller just did. Returns whether the candidate passed.
+bool Rest(Side& ref, Side& cand, const char* name) {
+    std::printf("-- %s\n", name);
     g_bitExact = false;
     const int frames = 1600, measureFrom = 960;
-    std::vector<unsigned char> previous = ref.pixels, windowStart;
+    std::vector<unsigned char> previous = ref.pixels, windowStart, lowest, highest;
     PixelDiff worstSelf, worstCand, worstSpread;
     int lastDrawn = -1, selfChangedFrames = 0;
     double refSeconds = 0, candSeconds = 0;
@@ -178,7 +177,11 @@ int RestScenario(Side& ref, Side& cand) {
         Frame(ref, cand, 960.0f, 600.0f);
         if (cand.drawn != before) lastDrawn = i;
         if (i < measureFrom) { previous = ref.pixels; continue; }
-        if (i == measureFrom) windowStart = ref.pixels;
+        if (i == measureFrom) windowStart = lowest = highest = ref.pixels;
+        for (size_t k = 0; k < ref.pixels.size(); ++k) {
+            lowest[k] = std::min(lowest[k], ref.pixels[k]);
+            highest[k] = std::max(highest[k], ref.pixels[k]);
+        }
         PixelDiff spread = Diff(windowStart, ref.pixels);
         worstSpread.pixels = std::max(worstSpread.pixels, spread.pixels);
         worstSpread.maxChannel = std::max(worstSpread.maxChannel, spread.maxChannel);
@@ -200,11 +203,42 @@ int RestScenario(Side& ref, Side& cand) {
     std::printf("  reference vs its window start:   worst %d pixels, max channel diff %d\n", worstSpread.pixels, worstSpread.maxChannel);
     std::printf("  candidate vs reference:          worst %d pixels, max channel diff %d\n", worstCand.pixels, worstCand.maxChannel);
     std::printf("  time per frame: reference %.2f ms, candidate %.3f ms\n", refSeconds * 1000 / measured, candSeconds * 1000 / measured);
+    int outside = 0, beyond = 0;
+    for (size_t k = 0; k < cand.pixels.size(); k += 4) {
+        int over = 0;
+        for (int c = 0; c < 4; ++c)
+            over = std::max({ over, int(lowest[k + c]) - int(cand.pixels[k + c]), int(cand.pixels[k + c]) - int(highest[k + c]) });
+        if (over > 0) { ++outside; beyond = std::max(beyond, over); }
+    }
+    std::printf("  candidate outside the reference's range: %d pixels, by up to %d levels\n", outside, beyond);
     const bool asleep = lastDrawn < measureFrom;
-    const bool within = worstCand.pixels <= worstSpread.pixels && worstCand.maxChannel <= worstSpread.maxChannel;
+    const bool within = beyond <= kRangeSlack;
     if (!asleep) std::printf("FAIL: the candidate was still drawing during the measured window\n");
-    if (!within) std::printf("FAIL: the frozen frame is further from the reference than the reference's own first frame is\n");
-    return asleep && within ? 0 : 1;
+    if (!within) std::printf("FAIL: the frozen frame is more than %d levels outside what the reference showed\n", kRangeSlack);
+    std::fflush(stdout);
+    return asleep && within;
+}
+
+int RestScenario(Side& ref, Side& cand) {
+    // The user's desktop: three columns of icons and one icon under the dropped rug.
+    std::vector<float> bumps;
+    for (int col = 0; col < 3; ++col)
+        for (int row = 0; row < 8; ++row)
+            bumps.insert(bumps.end(), { 47.0f + 95.0f * col, kHeight - (37.0f + 125.0f * row), 30.08f, 30.08f, 22.0f });
+    bumps.insert(bumps.end(), { 712.0f, kHeight - 412.0f, 30.08f, 30.08f, 22.0f });
+    Both(ref, cand, [&](Api& a) { a.set_bumps(bumps.data(), int(bumps.size() / 5)); });
+    bool passed = Rest(ref, cand, "first drop");
+
+    // Both layouts reset every particle, so the frozen candidate and the reference start bit-identical again.
+    Both(ref, cand, [](Api& a) { a.layout(kWidth / 2.0f, kHeight / 2.0f, 0.0f, 60.0f); });
+    passed = Rest(ref, cand, "after Center") && passed;
+
+    // Alt+Tab holds Alt for about half a second, which lifts the rug to the centre and drops it there.
+    Both(ref, cand, [](Api& a) { a.hold_begin(); });
+    for (int i = 0; i < 16; ++i) Frame(ref, cand, 960.0f, 600.0f);
+    Both(ref, cand, [](Api& a) { a.hold_end(); });
+    passed = Rest(ref, cand, "after an Alt press") && passed;
+    return passed ? 0 : 1;
 }
 
 int wmain(int argc, wchar_t** argv) {

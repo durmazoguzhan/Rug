@@ -65,7 +65,7 @@ Five rugs: Persian, Neural with circuit-board ornaments, Soviet, Pixel and Turki
 - A transparent window sits above the desktop icons and below all other windows. It ignores the mouse everywhere except over the rug.
 - The icon positions come from the Shell's `IFolderView`, so every icon becomes a bump in the right place. Rug does not open Explorer's process or read its memory.
 - The cloth is a physics simulation with friction and self-collisions, so it folds and settles instead of stretching like rubber.
-- Once the cloth moves less than 0.01 px in a second it sleeps, and nothing is simulated or drawn until something touches it. A moving rug sends only the part of the screen it changed to the compositor.
+- Once the cloth stops drifting it sleeps: its average pose over two seconds differs by less than 0.005 px from the two seconds before. Nothing is simulated or drawn until something touches it. The simulation never comes to a full stop and keeps trembling by a fraction of a pixel; the sleeping rug does not tremble, and its picture stays within 2 of 255 levels of the moving one. A moving rug sends only the part of the screen it changed to the compositor.
 - The rug is drawn with Direct3D 11, with soft shadows and the wool relief from the picture.
 - **Desktop floor** sets the wallpaper through `IDesktopWallpaper`, so Explorer stores the setting.
 
@@ -155,7 +155,7 @@ Beş halı: Persian, Neural (devre kartı süslemeli), Soviet, Pixel ve Turkish.
 - Şeffaf bir pencere masaüstü simgelerinin üstünde, diğer pencerelerin altında durur. Halının dışındaki her fare tıklamasını görmezden gelir.
 - Simgelerin konumları Shell'in `IFolderView` arayüzünden okunur, böylece her simge halıda doğru yere kabarcık olur. Rug, Explorer'ın process'ini açmıyor ve belleğini okumuyor.
 - Halı, sürtünme ve kendi kendine çarpışmalarla çalışan bir fizik simülasyonudur. Gerilmek yerine kıvrılır ve oturur.
-- Halı bir saniyede 0,01 pikselden az kıpırdayınca simülasyon uyuyor. Halıya bir şey dokunana kadar ne hesap yapılıyor ne de çizim. Hareket eden halı, ekranın yalnızca değişen kısmını bileşiciye gönderiyor.
+- Halının iki saniyelik ortalama konumu, önceki iki saniyeninkinden 0,005 pikselden az farklıysa simülasyon uyuyor. Halıya bir şey dokunana kadar ne hesap yapılıyor ne de çizim. Simülasyon hiç tam durmuyor ve pikselin çok küçük bir kısmı kadar titremeye devam ediyor. Uyuyan halı titremiyor, resmi de titreyen halınınkinden en fazla 2 seviye (255 üzerinden) farklı. Hareket eden halı, ekranın yalnızca değişen kısmını bileşiciye gönderiyor.
 - Halı Direct3D 11 ile çizilir, yumuşak gölgeler ve resimdeki yün dokusu ile birlikte.
 - **Desktop floor** duvar kağıdını `IDesktopWallpaper` ile ayarlıyor; ayarı Explorer kaydediyor.
 

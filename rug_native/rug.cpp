@@ -30,11 +30,13 @@ constexpr float kLiftRamp = 0.3f;
 constexpr int   kColumns = 44;
 constexpr bool  kDesktopShadow = false;
 
-// A cloth resting on icon bumps never reaches an exact fixed point: measured 2026-10-14, it keeps moving by
-// 0.001-0.005 px per second forever without drifting. Once it moves less than kSleepMove in kSleepWindow
-// steps it is left asleep until something touches it; at that point it is about 0.01 px from where it ends.
-constexpr int   kSleepWindow = 60;
-constexpr float kSleepMove = 0.01f;
+// A cloth resting on icon bumps never reaches an exact fixed point: it keeps trembling around a mean pose
+// without drifting, by up to 0.07 px after a drop at the screen centre (measured 2026-10-14 on 26 desktop
+// icons). A threshold on raw movement either never fires on that tremble or freezes a cloth that is still
+// creeping, so the cloth sleeps once the mean pose of a kSleepWindow-step window is less than kSleepDrift
+// from the window before it. Measured on eight drops: asleep after 8-28 s, each pose inside the original's tremble.
+constexpr int   kSleepWindow = 120;
+constexpr float kSleepDrift = 0.005f;
 
 struct Vtx { float pos[3]; float nrm[3]; float uv[2]; };
 struct Cb {
@@ -96,14 +98,16 @@ struct State {
     float rampT = 0.0f;
     float accum = 0.0f;
 
-    // The cloth is asleep: the last Cloth::step was a bit-exact no-op, or it moved less than kSleepMove
-    // over the last kSleepWindow steps. Nothing has touched the cloth or the ground since.
+    // The cloth is asleep: the last Cloth::step was a bit-exact no-op, or its mean pose moved less than
+    // kSleepDrift between the last two kSleepWindow-step windows. Nothing has touched the cloth or the ground since.
     bool settled = false;
     bool derivedStale = false;
     bool frameDirty = true;
     std::vector<V3> snapPos, snapPrev, snapVel;
     int windowSteps = 0;
-    std::vector<V3> windowStart;
+    bool havePrevMean = false;
+    // Positions are summed relative to the window's first pose, so float sums of ~1000 px values keep their precision.
+    std::vector<V3> windowStart, windowSum, prevMean;
 };
 
 State S;
@@ -119,6 +123,7 @@ V2 ToV2(float x, float y) { return { x, y }; }
 void Touch() {
     S.settled = false;
     S.windowSteps = 0;
+    S.havePrevMean = false;
     S.frameDirty = true;
 }
 
@@ -127,12 +132,21 @@ bool SameBits(const std::vector<T>& a, const std::vector<T>& b) {
     return a.size() == b.size() && std::memcmp(a.data(), b.data(), a.size() * sizeof(T)) == 0;
 }
 
-bool MovedLessThan(const std::vector<V3>& from, const std::vector<V3>& to, float distance) {
-    if (from.size() != to.size()) return false;
+// Turns the window's sums into its mean pose, stores it in prevMean and returns whether it is within distance of
+// the previous window's mean.
+bool MeanStayedWithin(float distance) {
     const float limit = distance * distance;
-    for (size_t i = 0; i < to.size(); ++i)
-        if (!(len2(to[i] - from[i]) < limit)) return false;
-    return true;
+    const float inv = 1.0f / float(kSleepWindow);
+    const bool compare = S.havePrevMean && S.prevMean.size() == S.windowStart.size();
+    S.prevMean.resize(S.windowStart.size());
+    bool within = compare;
+    for (size_t i = 0; i < S.windowStart.size(); ++i) {
+        const V3 mean = S.windowStart[i] + S.windowSum[i] * inv;
+        if (compare && !(len2(mean - S.prevMean[i]) < limit)) within = false;
+        S.prevMean[i] = mean;
+    }
+    S.havePrevMean = true;
+    return within;
 }
 
 }
@@ -408,6 +422,7 @@ extern "C" void rug_set_bumps(const float* data, int count) {
     if (S.field) S.field->setBumps(bumps);
     S.settled = false;
     S.windowSteps = 0;
+    S.havePrevMean = false;
 }
 
 // Runs one Cloth::step and decides whether the cloth may sleep. RUG_EXACT_STEPS keeps only the bit-exact
@@ -429,12 +444,17 @@ static void StepCloth(float dt) {
 #ifndef RUG_EXACT_STEPS
     if (S.settled || !free) {
         S.windowSteps = 0;
+        S.havePrevMean = false;
         return;
     }
-    if (S.windowSteps == 0) S.windowStart = S.snapPos;
+    if (S.windowSteps == 0) {
+        S.windowStart = c.pos;
+        S.windowSum.assign(c.pos.size(), V3{});
+    }
+    for (size_t i = 0; i < c.pos.size(); ++i) S.windowSum[i] += c.pos[i] - S.windowStart[i];
     if (++S.windowSteps == kSleepWindow) {
         S.windowSteps = 0;
-        S.settled = MovedLessThan(S.windowStart, c.pos, kSleepMove);
+        S.settled = MeanStayedWithin(kSleepDrift);
     }
 #endif
 }
