@@ -37,11 +37,18 @@ internal static class Overlay
     private const int VK_RMENU = 0xA5;
 
     private const uint WM_MOUSEWHEEL = 0x020A;
+    private const uint WM_DISPLAYCHANGE = 0x007E;
     private const double IconRefreshMs = 2000;
     private const float DefaultDrop = 90f;
     private const float MenuDrop = 110f;
     private const float CenterDrop = 60f;
     private const int FrameMs = 16;
+
+    // Display settings for EnumDisplaySettings and the high-resolution waitable timer the awake loop waits on.
+    private const int ENUM_CURRENT_SETTINGS = -1;
+    private const uint CREATE_WAITABLE_TIMER_HIGH_RESOLUTION = 0x2;
+    private const uint TIMER_ALL_ACCESS = 0x1F0003;
+    private static volatile int _refreshHz = 60;
 
     private static readonly ConcurrentQueue<Action> _commands = new();
     private static readonly ManualResetEventSlim _ready = new(false);
@@ -117,6 +124,11 @@ internal static class Overlay
     [DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr obj);
     [DllImport("gdi32.dll")] private static extern IntPtr CreateDIBSection(IntPtr hdc, ref BITMAPINFO bmi, uint usage, out IntPtr bits, IntPtr section, uint offset);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr GetModuleHandle(string? moduleName);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern IntPtr CreateWaitableTimerExW(IntPtr attributes, string? name, uint flags, uint access);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern bool SetWaitableTimer(IntPtr timer, ref long dueTime, int period, IntPtr callback, IntPtr arg, bool resume);
+    [DllImport("kernel32.dll")] private static extern uint WaitForSingleObject(IntPtr handle, uint ms);
+    [DllImport("kernel32.dll")] private static extern bool CloseHandle(IntPtr handle);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern bool EnumDisplaySettingsW(string? deviceName, int mode, ref DEVMODE devMode);
 
     [StructLayout(LayoutKind.Sequential)] private struct POINT { public int x, y; }
     [StructLayout(LayoutKind.Sequential)] private struct SIZE { public int cx, cy; }
@@ -146,6 +158,21 @@ internal static class Overlay
         public int biCompression, biSizeImage, biXPelsPerMeter, biYPelsPerMeter, biClrUsed, biClrImportant;
     }
     [StructLayout(LayoutKind.Sequential)] private struct BITMAPINFO { public BITMAPINFOHEADER bmiHeader; }
+    // The full DEVMODEW, so EnumDisplaySettings never writes past the struct; only dmDisplayFrequency is read.
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct DEVMODE
+    {
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
+        public ushort dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra;
+        public uint dmFields;
+        public int dmPositionX, dmPositionY;
+        public uint dmDisplayOrientation, dmDisplayFixedOutput;
+        public short dmColor, dmDuplex, dmYResolution, dmTTOption, dmCollate;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmFormName;
+        public ushort dmLogPixels;
+        public uint dmBitsPerPel, dmPelsWidth, dmPelsHeight, dmDisplayFlags, dmDisplayFrequency;
+        public uint dmICMMethod, dmICMIntent, dmMediaType, dmDitherType, dmReserved1, dmReserved2, dmPanningWidth, dmPanningHeight;
+    }
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct WNDCLASS
     {
@@ -365,6 +392,12 @@ internal static class Overlay
         bool presented = false;
         bool handlesShown = false;
 
+        QueryRefresh();
+        // A high-resolution timer paces a moving rug to the display's refresh; IntPtr.Zero on Windows before 1803 falls
+        // back to a plain sleep. dueNext is the clock time (seconds) of the next frame boundary.
+        IntPtr frameTimer = CreateWaitableTimerExW(IntPtr.Zero, null, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+        double dueNext = 0;
+
         var clock = Stopwatch.StartNew();
         double last = 0;
         bool clickable = false;
@@ -560,10 +593,29 @@ internal static class Overlay
                 presented = true;
             }
 
-            Thread.Sleep(FrameMs);
+            // A moving rug is paced to the display's refresh, so a drag looks as smooth as the monitor allows (60 Hz or
+            // 120 Hz) instead of the 32 fps a Thread.Sleep(16) gives at the default 15.6 ms timer. While the rug sleeps
+            // nothing is drawn, so a plain sleep keeps the idle wake-ups low and input latency unchanged.
+            if ((drawn || dragging || rotating) && frameTimer != IntPtr.Zero)
+            {
+                double frame = 1.0 / Math.Max(24, _refreshHz);
+                double now2 = clock.Elapsed.TotalSeconds;
+                // Resume from now after a sleep or an overrun, so the timer never tries to catch up a long gap.
+                dueNext = (dueNext <= now2 ? now2 : dueNext) + frame;
+                double waitSec = dueNext - clock.Elapsed.TotalSeconds;
+                if (waitSec > 0.0002)
+                {
+                    long due = -(long)(waitSec * 1e7); // 100 ns units, negative for a relative wait
+                    SetWaitableTimer(frameTimer, ref due, 0, IntPtr.Zero, IntPtr.Zero, false);
+                    WaitForSingleObject(frameTimer, FrameMs * 2);
+                }
+            }
+            else
+                Thread.Sleep(FrameMs);
         }
 
         rug_shutdown();
+        if (frameTimer != IntPtr.Zero) CloseHandle(frameTimer);
         Marshal.FreeHGlobal(originPtr);
         Marshal.FreeHGlobal(sizePtr);
         Marshal.FreeHGlobal(blendPtr);
@@ -577,6 +629,15 @@ internal static class Overlay
 
     private static bool AltDown() =>
         ((GetAsyncKeyState(VK_LMENU) | GetAsyncKeyState(VK_RMENU)) & 0x8000) != 0;
+
+    // The primary display's current refresh, so a moving rug is paced to it (60 Hz or 120 Hz). Left at 60 when the
+    // call fails or reports a rate too low to trust.
+    private static void QueryRefresh()
+    {
+        var mode = new DEVMODE { dmSize = (ushort)Marshal.SizeOf<DEVMODE>() };
+        if (EnumDisplaySettingsW(null, ENUM_CURRENT_SETTINGS, ref mode) && mode.dmDisplayFrequency >= 24)
+            _refreshHz = (int)mode.dmDisplayFrequency;
+    }
 
     private static void ApplyBumps(float[] bumps)
     {
@@ -616,6 +677,11 @@ internal static class Overlay
 
     private static IntPtr OnWndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
+        if (msg == WM_DISPLAYCHANGE)
+        {
+            QueryRefresh();
+            return IntPtr.Zero;
+        }
         if (msg == WM_MOUSEWHEEL)
         {
             long v = wParam.ToInt64();
