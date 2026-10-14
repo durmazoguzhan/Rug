@@ -18,7 +18,11 @@ RUG_API void rug_set_bumps(const float* data, int count);
 
 RUG_API void rug_step(float dt);
 
-RUG_API void rug_render(unsigned char* dst, int stride, int* rect);
+// Returns 1 when dst was updated; rect receives the x, y, width, height that changed.
+RUG_API int  rug_render(unsigned char* dst, int stride, int* rect);
+
+// Forces the next rug_render to redraw, after the caller drew over dst itself.
+RUG_API void rug_invalidate(void);
 
 RUG_API int  rug_mouse_down(float x, float y);
 RUG_API void rug_mouse_drag(float x, float y);
@@ -42,5 +46,13 @@ RUG_API void rug_hold_end(void);
 RUG_API void rug_layout(float cx, float cy, float angle, float drop);
 
 RUG_API void rug_shutdown(void);
+
+// Desktop icons through the Shell's IFolderView. Writes up to capacity x, y pairs (list view client
+// coordinates) and layout = { spacing x, spacing y, icon size in logical pixels }. Returns the item count, -1 on failure.
+RUG_API int  rug_desktop_items(int* xy, int capacity, int* layout);
+
+// Sets the wallpaper on every monitor through IDesktopWallpaper; position is a DESKTOP_WALLPAPER_POSITION or -1 to
+// keep it, and an empty path changes only the position.
+RUG_API int  rug_set_wallpaper(const wchar_t* path, int position);
 
 }
