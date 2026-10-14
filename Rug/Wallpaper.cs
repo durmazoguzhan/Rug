@@ -23,6 +23,8 @@ internal static class Wallpaper
         return key?.GetValue("Wallpaper") as string;
     }
 
+    // Explorer applies and records the wallpaper through IDesktopWallpaper, so Rug itself never writes the
+    // Control Panel\Desktop values that ransomware also rewrites.
     public static void Apply(AppSettings settings, string floorPath)
     {
         Directory.CreateDirectory(WallpaperDir);
@@ -39,13 +41,9 @@ internal static class Wallpaper
             settings.PrevTileWallpaper = key?.GetValue("TileWallpaper")?.ToString() ?? "0";
         }
 
-        using (var key = Registry.CurrentUser.OpenSubKey(DesktopKey, true))
-        {
-            key?.SetValue("WallpaperStyle", "10");
-            key?.SetValue("TileWallpaper", "0");
-        }
-        SystemParametersInfoW(SPI_SETDESKWALLPAPER, 0, copy, SPIF_UPDATEINIFILE | SPIF_SENDCHANGE);
+        bool applied = DesktopShell.SetWallpaper(copy, DesktopShell.WallpaperPosition.Fill);
         settings.Save();
+        if (!applied) throw new InvalidOperationException("Windows did not accept the new wallpaper.");
     }
 
     public static bool CanRestore(AppSettings settings) => settings.PrevWallpaper != null;
@@ -53,15 +51,32 @@ internal static class Wallpaper
     public static void Restore(AppSettings settings)
     {
         if (settings.PrevWallpaper == null) return;
-        using (var key = Registry.CurrentUser.OpenSubKey(DesktopKey, true))
+        var position = PositionOf(settings.PrevWallpaperStyle, settings.PrevTileWallpaper);
+        if (settings.PrevWallpaper.Length > 0)
         {
-            key?.SetValue("WallpaperStyle", settings.PrevWallpaperStyle ?? "0");
-            key?.SetValue("TileWallpaper", settings.PrevTileWallpaper ?? "0");
+            DesktopShell.SetWallpaper(settings.PrevWallpaper, position);
         }
-        SystemParametersInfoW(SPI_SETDESKWALLPAPER, 0, settings.PrevWallpaper, SPIF_UPDATEINIFILE | SPIF_SENDCHANGE);
+        else
+        {
+            // IDesktopWallpaper documents no way to clear the picture, so "no wallpaper" still goes through the system call.
+            DesktopShell.SetWallpaper("", position);
+            SystemParametersInfoW(SPI_SETDESKWALLPAPER, 0, "", SPIF_UPDATEINIFILE | SPIF_SENDCHANGE);
+        }
         settings.PrevWallpaper = null;
         settings.PrevWallpaperStyle = null;
         settings.PrevTileWallpaper = null;
         settings.Save();
     }
+
+    // Control Panel\Desktop WallpaperStyle and TileWallpaper as Windows writes them for each position.
+    private static DesktopShell.WallpaperPosition PositionOf(string? style, string? tile) => (style, tile) switch
+    {
+        ("0", "1") => DesktopShell.WallpaperPosition.Tile,
+        ("0", _) => DesktopShell.WallpaperPosition.Center,
+        ("2", _) => DesktopShell.WallpaperPosition.Stretch,
+        ("6", _) => DesktopShell.WallpaperPosition.Fit,
+        ("10", _) => DesktopShell.WallpaperPosition.Fill,
+        ("22", _) => DesktopShell.WallpaperPosition.Span,
+        _ => DesktopShell.WallpaperPosition.Keep,
+    };
 }
