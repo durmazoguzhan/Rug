@@ -2,9 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace Rug;
 
@@ -16,6 +19,7 @@ internal static class Assets
     public static string UserFloorDir => Path.Combine(AppSettings.DataDir, "floors");
 
     private static string CacheDir => Path.Combine(AppSettings.DataDir, "assets");
+    private static string ThumbnailDir => Path.Combine(AppSettings.DataDir, "thumbnails");
 
     public static List<string> BuiltinRugs() => Bundled("rugs");
 
@@ -79,8 +83,24 @@ internal static class Assets
         };
     }
 
+    // Decoding a 5000 px picture takes about 120 ms, so each thumbnail is kept as a lossless PNG next to the
+    // settings; the cached pixels are identical to a fresh one. The name changes when the picture changes.
     public static Bitmap Thumbnail(string path, int width = 100, int height = 68)
     {
+        string? cached = ThumbnailCachePath(path, width, height);
+        if (cached != null && File.Exists(cached))
+        {
+            try
+            {
+                using var stored = new Bitmap(cached);
+                return new Bitmap(stored);
+            }
+            catch (Exception)
+            {
+                // A damaged cache file is rebuilt below.
+            }
+        }
+
         var bmp = new Bitmap(width, height);
         try
         {
@@ -94,8 +114,40 @@ internal static class Assets
         }
         catch (Exception)
         {
-
+            return bmp;
         }
+        if (cached != null) TrySave(bmp, cached);
         return bmp;
+    }
+
+    private static string? ThumbnailCachePath(string path, int width, int height)
+    {
+        try
+        {
+            var info = new FileInfo(path);
+            if (!info.Exists) return null;
+            string key = $"{info.FullName}|{info.Length}|{info.LastWriteTimeUtc.Ticks}|{width}x{height}";
+            string name = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key)), 0, 16) + ".png";
+            return Path.Combine(ThumbnailDir, name);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private static void TrySave(Bitmap bmp, string target)
+    {
+        try
+        {
+            Directory.CreateDirectory(ThumbnailDir);
+            string temp = target + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            bmp.Save(temp, ImageFormat.Png);
+            File.Move(temp, target, true);
+        }
+        catch (Exception)
+        {
+            // Without the cache the next start decodes the picture again.
+        }
     }
 }

@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace Rug;
@@ -93,17 +95,21 @@ internal sealed class SettingsForm : Form
 
     public void Rebuild()
     {
-        _rugTiles.Controls.Clear();
-        _floorTiles.Controls.Clear();
+        DisposeTiles(_rugTiles);
+        DisposeTiles(_floorTiles);
 
-        string? selected = _settings.RugPath ?? Assets.AllRugs().FirstOrDefault();
-        foreach (string path in Assets.AllRugs())
+        List<string> rugs = Assets.AllRugs();
+        List<string> floors = Assets.Floors();
+        PrepareThumbnails(rugs.Concat(floors));
+
+        string? selected = _settings.RugPath ?? rugs.FirstOrDefault();
+        foreach (string path in rugs)
         {
             string p = path;
             _rugTiles.Controls.Add(Tile(p, Assets.DisplayName(path), p == selected, () => { _tray.PickRug(p); Rebuild(); }));
         }
 
-        foreach (string path in Assets.Floors())
+        foreach (string path in floors)
         {
             string p = path;
             _floorTiles.Controls.Add(Tile(p, Assets.DisplayName(path), false, () => { _tray.PickFloor(p); Rebuild(); }));
@@ -140,6 +146,27 @@ internal sealed class SettingsForm : Form
         tile.FlatAppearance.BorderColor = selected ? Color.FromArgb(0, 122, 255) : Color.Silver;
         tile.Click += (_, _) => onClick();
         return tile;
+    }
+
+    // Clear() only detaches the old tiles; each one keeps its window handle until it is disposed. A tile's own
+    // click rebuilds the panel, so the disposal waits until that click has finished. Thumbnails stay in _thumbs,
+    // since a Button does not dispose its Image.
+    private void DisposeTiles(Control panel)
+    {
+        Control[] old = panel.Controls.Cast<Control>().ToArray();
+        panel.Controls.Clear();
+        if (old.Length == 0) return;
+        Action dispose = () => { foreach (Control control in old) control.Dispose(); };
+        if (IsHandleCreated) BeginInvoke(dispose);
+        else dispose();
+    }
+
+    private void PrepareThumbnails(IEnumerable<string> paths)
+    {
+        string[] missing = paths.Distinct().Where(p => !_thumbs.ContainsKey(p)).ToArray();
+        var made = new Image[missing.Length];
+        Parallel.For(0, missing.Length, i => made[i] = Assets.Thumbnail(missing[i]));
+        for (int i = 0; i < missing.Length; i++) _thumbs[missing[i]] = made[i];
     }
 
     private Image Thumbnail(string path)
