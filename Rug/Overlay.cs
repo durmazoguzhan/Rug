@@ -84,6 +84,10 @@ internal static class Overlay
     [DllImport("rug_native.dll", CallingConvention = CallingConvention.Cdecl)] private static extern void rug_hold_end();
     [DllImport("rug_native.dll", CallingConvention = CallingConvention.Cdecl)] private static extern void rug_get_bounds(float[] bounds);
     [DllImport("rug_native.dll", CallingConvention = CallingConvention.Cdecl)] private static extern void rug_layout(float cx, float cy, float angle, float drop);
+    [DllImport("rug_native.dll", CallingConvention = CallingConvention.Cdecl)] private static extern int rug_point_count();
+    [DllImport("rug_native.dll", CallingConvention = CallingConvention.Cdecl)] private static extern int rug_get_points(float[] points, int maxVertices);
+    [DllImport("rug_native.dll", CallingConvention = CallingConvention.Cdecl)] private static extern int rug_set_points(float[] points, int count);
+    [DllImport("rug_native.dll", CallingConvention = CallingConvention.Cdecl)] private static extern int rug_is_settled();
     [DllImport("rug_native.dll", CallingConvention = CallingConvention.Cdecl)] private static extern void rug_shutdown();
 
     private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
@@ -317,6 +321,14 @@ internal static class Overlay
             _ready.Set();
             return;
         }
+        // Put back the exact drape from last time: rebuild at its saved scale, then (once the bumps are known)
+        // restore every vertex. A missing or mismatched file leaves the fresh centred drop below instead.
+        bool haveDrape = DrapeStore.TryLoad(out float drapeScale, out float[] drapePoints);
+        if (haveDrape)
+        {
+            _rugScale = Math.Clamp(drapeScale, 0.25f, 0.75f);
+            _currentScale = _rugScale;
+        }
         rug_rebuild(_rugScale, DefaultDrop);
 
         IntPtr instance = GetModuleHandle(null);
@@ -402,7 +414,6 @@ internal static class Overlay
         double last = 0;
         bool clickable = false;
         bool wasDown = false;
-        bool wasAlt = false;
         bool rotating = false;
         int grabbedCorner = -1;
         float prevAngle = 0;
@@ -414,9 +425,18 @@ internal static class Overlay
         IntPtr zAbove = IntPtr.Zero, zBelow = IntPtr.Zero;
         long lastIconScan = 0;
         Task<float[]>? scanTask = null;
+        bool wasSettled = false;
+        float[]? drapeBuf = null;
+        float[] lastScanRaw = Array.Empty<float>();
+        float[] appliedPose = new float[3];
+        float[] scanPose = new float[3];
 
         SetClickThrough(hwnd, true);
         ApplyBumps(DesktopIcons.Scan(_host, width, height));
+        // The drape was saved over these same icons, so restore it now that the ground is set. The count only
+        // differs when the rug picture (its aspect) changed since; then the fresh drop above stands.
+        if (haveDrape && drapePoints.Length == rug_point_count() * 3)
+            rug_set_points(drapePoints, rug_point_count());
         _ready.Set();
 
         while (_running)
@@ -441,15 +461,27 @@ internal static class Overlay
             bool down = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
             bool alt = AltDown();
 
-            if (alt && !wasAlt && !dragging)
-                rug_hold_begin();
-            else if (!alt && wasAlt)
-                rug_hold_end();
-            wasAlt = alt;
+            // Decide click-through before handling input, so overOverlay is current when the corner grab and the drag
+            // read it below. The rug is clickable when the cursor is over it, or over a corner handle while Alt is
+            // held. Re-read overOverlay the instant WS_EX_TRANSPARENT is dropped (verified same-thread immediate by
+            // tests/clickthrough-test): otherwise the first click after the cursor reaches the rug is lost, because
+            // overOverlay was taken at the top of the loop while the window was still click-through.
+            bool hit = rug_hit_test(px, py) != 0;
+            bool wantClick = hit || rotating || dragging || (alt && NearCorner(px, py, corners) >= 0);
+            if (wantClick != clickable)
+            {
+                clickable = wantClick;
+                SetClickThrough(hwnd, !wantClick);
+                if (wantClick) overOverlay = WindowFromPoint(cursor) == hwnd;
+            }
+
+            // Alt on its own only shows the corner handles; it must not disturb the rug. The rug is lifted when a
+            // manipulation actually starts (the corner grab below), so Alt+Tab or a stray Alt leaves it in place.
 
             if (alt && down && !wasDown && !dragging && overOverlay && NearCorner(px, py, corners) >= 0)
             {
                 rotating = true;
+                rug_hold_begin();
                 grabbedCorner = NearCorner(px, py, corners);
                 rug_get_pose(pose);
                 float sx = px - pose[0], sy = py - pose[1];
@@ -471,6 +503,7 @@ internal static class Overlay
                         _currentScale = _rugScale;
                         rug_resize(_rugScale);
                     }
+                    rug_hold_end();
                 }
                 else
                 {
@@ -507,14 +540,6 @@ internal static class Overlay
                     }
                     else if (prevDist <= 1f) prevDist = dist;
                 }
-            }
-
-            bool hit = rug_hit_test(px, py) != 0;
-            bool wantClick = hit || rotating || dragging || (alt && NearCorner(px, py, corners) >= 0);
-            if (wantClick != clickable)
-            {
-                clickable = wantClick;
-                SetClickThrough(hwnd, !wantClick);
             }
 
             if (!rotating)
@@ -556,13 +581,46 @@ internal static class Overlay
             }
             if (scanTask != null && scanTask.IsCompleted)
             {
-                ApplyBumps(scanTask.Result);
+                float[] raw = scanTask.Result;
                 scanTask = null;
+                // Re-apply the bumps only when the icons actually moved, or the rug slid far enough to cover
+                // different ones. GroupPile reads the live pose through rug_hit_test, so re-running it on a
+                // sub-pixel tremble resends near-identical bumps and resets the sleep window every scan, which
+                // keeps the rug awake for good. A few pixels of real movement still re-groups the pile.
+                const float regroupMovePx = 4f;
+                const float regroupTurnRad = 0.02f;
+                rug_get_pose(scanPose);
+                bool iconsMoved = !MemoryMarshal.AsBytes(raw.AsSpan()).SequenceEqual(MemoryMarshal.AsBytes(lastScanRaw.AsSpan()));
+                float dx = scanPose[0] - appliedPose[0], dy = scanPose[1] - appliedPose[1];
+                bool rugMoved = dx * dx + dy * dy > regroupMovePx * regroupMovePx
+                    || MathF.Abs(scanPose[2] - appliedPose[2]) > regroupTurnRad;
+                if (iconsMoved || rugMoved)
+                {
+                    ApplyBumps(raw);
+                    lastScanRaw = raw;
+                    appliedPose[0] = scanPose[0];
+                    appliedPose[1] = scanPose[1];
+                    appliedPose[2] = scanPose[2];
+                }
             }
 
             double now = clock.Elapsed.TotalSeconds;
             rug_step((float)(now - last));
             last = now;
+
+            // Save the drape each time the rug comes to rest, so a restart puts the exact folds back. This fires
+            // only on the settle edge, so a sleeping rug writes nothing and a drag writes once when it stops.
+            bool settledNow = rug_is_settled() != 0;
+            if (settledNow && !wasSettled)
+            {
+                int n = rug_point_count();
+                if (n > 0)
+                {
+                    if (drapeBuf == null || drapeBuf.Length < n * 3) drapeBuf = new float[n * 3];
+                    if (rug_get_points(drapeBuf, n) == n) DrapeStore.Save(_currentScale, drapeBuf, n);
+                }
+            }
+            wasSettled = settledNow;
 
             // The handles sit inside the rug's area, so a redraw of that area erases them.
             if (!alt && handlesShown)

@@ -6,7 +6,9 @@ namespace Rug;
 
 internal static class DesktopIcons
 {
-    private const float BumpHeight = 22f;
+    // How high the rug rises over an icon. Raised so an icon away from the rug's edge still reads through shading,
+    // where before only the silhouette at the edge gave it away.
+    private const float BumpHeight = 30f;
 
     // The rectangle the desktop list view reports for LVIR_ICON, rebuilt from the item position: spacing.x - 1 wide,
     // icon + 4 high, centred on the icon and 3 px below the position. Measured 2026-10-14 on Windows 11 26200
