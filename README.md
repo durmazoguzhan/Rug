@@ -34,6 +34,12 @@ You need Visual Studio 2022 (or newer) with the **.NET desktop development** and
 
 The build puts `Rug.exe` and `rug_native.dll` in `Rug\bin\Release\net8.0-windows\`. Keep the two files together. The rug and floor pictures are inside `Rug.exe`, so the `Resources` folder does not need to be copied anywhere.
 
+`rug_native.dll` links the C++ runtime statically and has its shaders compiled in, so it needs neither the Visual C++ Redistributable nor `d3dcompiler_47.dll`.
+
+### Tests
+
+`tests\native-equivalence\run.cmd <reference rug_native.dll>` builds `rug_native.dll` from this checkout and runs it next to a reference build of the original code with the same scripted input. Without the sleep threshold every frame must be bit-identical. With it, a rug resting on icon bumps must stay within the reference's own frame-to-frame change.
+
 ## Use
 
 - Drag the rug by any edge. Hold **Alt** to lift it flat in the air, and let go to drop it again.
@@ -57,9 +63,15 @@ Five rugs: Persian, Neural with circuit-board ornaments, Soviet, Pixel and Turki
 ## How it works
 
 - A transparent window sits above the desktop icons and below all other windows. It ignores the mouse everywhere except over the rug.
-- The icon positions are read from Explorer, so every icon becomes a bump in the right place.
+- The icon positions come from the Shell's `IFolderView`, so every icon becomes a bump in the right place. Rug does not open Explorer's process or read its memory.
 - The cloth is a physics simulation with friction and self-collisions, so it folds and settles instead of stretching like rubber.
+- Once the cloth moves less than 0.01 px in a second it sleeps, and nothing is simulated or drawn until something touches it. A moving rug sends only the part of the screen it changed to the compositor.
 - The rug is drawn with Direct3D 11, with soft shadows and the wool relief from the picture.
+- **Desktop floor** sets the wallpaper through `IDesktopWallpaper`, so Explorer stores the setting.
+
+## Security software
+
+`Rug.exe` is not signed and few people run it, so reputation checks may stop it the first time it starts. Trend Micro shows this as "Newly Encountered Program Detected". Choose **Allow Once**, or ask your IT team to allow the file.
 
 ## Known limitations
 
@@ -67,6 +79,7 @@ Five rugs: Persian, Neural with circuit-board ornaments, Soviet, Pixel and Turki
 - The floor shadow is not drawn yet.
 - If Explorer restarts, restart Rug as well.
 - Sweeping does not work while **Auto arrange icons** is on.
+- Each bump's place is worked out from the icon's position and size. The offsets were measured at 125 % scaling with medium icons; at other settings a bump may sit a pixel or two away from its icon.
 
 ## Credits
 
@@ -111,6 +124,12 @@ Visual Studio 2022 (veya daha yeni), **.NET desktop development** ve **Desktop d
 
 Derleme `Rug.exe` ile `rug_native.dll` dosyasını `Rug\bin\Release\net8.0-windows\` klasörüne koyar. İkisini yan yana tutun. Halı ve zemin resimleri `Rug.exe` içine gömülüdür, ayrıca bir klasör kopyalamanız gerekmez.
 
+`rug_native.dll` C++ runtime'ı kendi içinde taşıyor ve shader'ları derlenmiş halde içeriyor. Bu yüzden Visual C++ Redistributable ya da `d3dcompiler_47.dll` gerekmiyor.
+
+#### Testler
+
+`tests\native-equivalence\run.cmd <referans rug_native.dll>` komutu bu kodun `rug_native.dll` dosyasını derliyor. Sonra onu orijinal kodun bir derlemesiyle yan yana, aynı girdilerle çalıştırıyor. Uyku eşiği kapalıyken her kare bit bit aynı olmalı. Eşik açıkken ikon tümseklerinin üstünde duran halı, referansın kendi kareleri arasındaki farkı aşmamalı.
+
 ### Kullanım
 
 - Halıyı herhangi bir kenarından sürükleyin. **Alt** tuşunu basılı tutarsanız halı havada düz kalkar, bırakınca tekrar iner.
@@ -134,9 +153,15 @@ Beş halı: Persian, Neural (devre kartı süslemeli), Soviet, Pixel ve Turkish.
 ### Nasıl çalışır
 
 - Şeffaf bir pencere masaüstü simgelerinin üstünde, diğer pencerelerin altında durur. Halının dışındaki her fare tıklamasını görmezden gelir.
-- Simgelerin konumları Explorer'dan okunur, böylece her simge halıda doğru yere kabarcık olur.
+- Simgelerin konumları Shell'in `IFolderView` arayüzünden okunur, böylece her simge halıda doğru yere kabarcık olur. Rug, Explorer'ın process'ini açmıyor ve belleğini okumuyor.
 - Halı, sürtünme ve kendi kendine çarpışmalarla çalışan bir fizik simülasyonudur. Gerilmek yerine kıvrılır ve oturur.
+- Halı bir saniyede 0,01 pikselden az kıpırdayınca simülasyon uyuyor. Halıya bir şey dokunana kadar ne hesap yapılıyor ne de çizim. Hareket eden halı, ekranın yalnızca değişen kısmını bileşiciye gönderiyor.
 - Halı Direct3D 11 ile çizilir, yumuşak gölgeler ve resimdeki yün dokusu ile birlikte.
+- **Desktop floor** duvar kağıdını `IDesktopWallpaper` ile ayarlıyor; ayarı Explorer kaydediyor.
+
+### Güvenlik yazılımları
+
+`Rug.exe` imzalı değil ve az kişi çalıştırıyor. Bu yüzden dosya itibarına bakan kontroller onu ilk açılışta durdurabiliyor. Trend Micro bunu "Newly Encountered Program Detected" uyarısıyla gösteriyor. **Allow Once**'ı seçin ya da IT ekibinizden dosyaya izin vermesini isteyin.
 
 ### Bilinen sınırlamalar
 
@@ -144,6 +169,7 @@ Beş halı: Persian, Neural (devre kartı süslemeli), Soviet, Pixel ve Turkish.
 - Zemin gölgesi henüz çizilmiyor.
 - Explorer yeniden başlarsa Rug'ı da yeniden başlatın.
 - **Simgeleri otomatik hizala** açıkken süpürme çalışmaz.
+- Her kabarcığın yeri, simgenin konumundan ve boyutundan hesaplanıyor. Kaydırma değerleri %125 ölçekte, orta boy simgelerle ölçüldü. Başka ayarlarda bir kabarcık simgesinden bir iki piksel kayabilir.
 
 ### Lisans
 
