@@ -1,8 +1,10 @@
 // Drives two builds of rug_native.dll with the same scripted input.
 //   exact: every frame must be bit-identical (pixels, pose, bounds, corners, hit tests). Run it against a
 //          candidate built with RUG_EXACT_STEPS, which keeps every skip except the sleep threshold.
-//   sleep: the cloth rests on icon bumps for 50 s; reports how far the sleeping candidate's pixels are
-//          from the reference, next to how much the reference's own consecutive frames differ.
+//   sleep: the cloth rests on icon bumps for 50 s. The sleeping candidate shows one fixed frame, so over the
+//          last 20 s it is compared with every reference frame, next to the reference's own first frame of that
+//          window compared the same way: a frozen frame passes when it is no further from the original than the
+//          original is from itself.
 // Usage: equivalence.exe exact|sleep <reference dll> <candidate dll> <rug picture> <second rug picture>
 #define NOMINMAX
 #include <windows.h>
@@ -166,8 +168,8 @@ int RestScenario(Side& ref, Side& cand) {
 
     g_bitExact = false;
     const int frames = 1600, measureFrom = 960;
-    std::vector<unsigned char> previous = ref.pixels;
-    PixelDiff worstSelf, worstCand;
+    std::vector<unsigned char> previous = ref.pixels, windowStart;
+    PixelDiff worstSelf, worstCand, worstSpread;
     int lastDrawn = -1, selfChangedFrames = 0;
     double refSeconds = 0, candSeconds = 0;
     for (int i = 0; i < frames; ++i) {
@@ -176,6 +178,10 @@ int RestScenario(Side& ref, Side& cand) {
         Frame(ref, cand, 960.0f, 600.0f);
         if (cand.drawn != before) lastDrawn = i;
         if (i < measureFrom) { previous = ref.pixels; continue; }
+        if (i == measureFrom) windowStart = ref.pixels;
+        PixelDiff spread = Diff(windowStart, ref.pixels);
+        worstSpread.pixels = std::max(worstSpread.pixels, spread.pixels);
+        worstSpread.maxChannel = std::max(worstSpread.maxChannel, spread.maxChannel);
         refSeconds += ref.seconds - r0;
         candSeconds += cand.seconds - c0;
         PixelDiff self = Diff(previous, ref.pixels), vs = Diff(ref.pixels, cand.pixels);
@@ -191,13 +197,13 @@ int RestScenario(Side& ref, Side& cand) {
     std::printf("last %d frames (%.0f s):\n", measured, measured * kFrameSeconds);
     std::printf("  reference vs its previous frame: changed in %d frames, worst %d pixels, max channel diff %d\n",
                 selfChangedFrames, worstSelf.pixels, worstSelf.maxChannel);
+    std::printf("  reference vs its window start:   worst %d pixels, max channel diff %d\n", worstSpread.pixels, worstSpread.maxChannel);
     std::printf("  candidate vs reference:          worst %d pixels, max channel diff %d\n", worstCand.pixels, worstCand.maxChannel);
     std::printf("  time per frame: reference %.2f ms, candidate %.3f ms\n", refSeconds * 1000 / measured, candSeconds * 1000 / measured);
-    // The sleeping candidate passes when it stays within the reference's own frame-to-frame change.
     const bool asleep = lastDrawn < measureFrom;
-    const bool within = worstCand.pixels <= worstSelf.pixels && worstCand.maxChannel <= worstSelf.maxChannel;
+    const bool within = worstCand.pixels <= worstSpread.pixels && worstCand.maxChannel <= worstSpread.maxChannel;
     if (!asleep) std::printf("FAIL: the candidate was still drawing during the measured window\n");
-    if (!within) std::printf("FAIL: the candidate differs from the reference more than the reference differs from itself\n");
+    if (!within) std::printf("FAIL: the frozen frame is further from the reference than the reference's own first frame is\n");
     return asleep && within ? 0 : 1;
 }
 
