@@ -323,7 +323,11 @@ internal static class Overlay
         }
         // Put back the exact drape from last time: rebuild at its saved scale, then (once the bumps are known)
         // restore every vertex. A missing or mismatched file leaves the fresh centred drop below instead.
-        bool haveDrape = DrapeStore.TryLoad(out float drapeScale, out float[] drapePoints);
+        bool haveDrape = DrapeStore.TryLoad(out float drapeScale, out int drapeW, out int drapeH, out float[] drapePoints);
+        // The saved positions are screen pixels. On another screen size they would land off-screen, out of reach
+        // of the mouse, so drop a fresh rug instead.
+        if (haveDrape && (drapeW != _width || drapeH != _height))
+            haveDrape = false;
         if (haveDrape)
         {
             _rugScale = Math.Clamp(drapeScale, 0.25f, 0.75f);
@@ -617,7 +621,7 @@ internal static class Overlay
                 if (n > 0)
                 {
                     if (drapeBuf == null || drapeBuf.Length < n * 3) drapeBuf = new float[n * 3];
-                    if (rug_get_points(drapeBuf, n) == n) DrapeStore.Save(_currentScale, drapeBuf, n);
+                    if (rug_get_points(drapeBuf, n) == n) DrapeStore.Save(_currentScale, _width, _height, drapeBuf, n);
                 }
             }
             wasSettled = settledNow;

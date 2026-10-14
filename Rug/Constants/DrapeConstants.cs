@@ -7,7 +7,7 @@ internal static class DrapeConstants
     public const int Magic = 0x44525547; // "GURD"
 
     /// <summary>Layout version of the drape file; a mismatch makes the reader fall back to a fresh drop.</summary>
-    public const int Version = 1;
+    public const int Version = 2;
 
     /// <summary>The drape file's name inside the Rug data folder.</summary>
     public const string FileName = "drape.bin";
