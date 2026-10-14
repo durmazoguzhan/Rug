@@ -38,7 +38,9 @@ The build puts `Rug.exe` and `rug_native.dll` in `Rug\bin\Release\net8.0-windows
 
 ### Tests
 
-`tests\native-equivalence\run.cmd <reference rug_native.dll>` builds `rug_native.dll` from this checkout and runs it next to a reference build of the original code with the same scripted input. Without the sleep threshold every frame must be bit-identical. With it, a rug resting on icon bumps must stay within the reference's own frame-to-frame change.
+`tests\native-equivalence\run.cmd <reference rug_native.dll>` builds `rug_native.dll` from this checkout and runs it next to a reference build of the original code on the same scripted input. The reference is the original code with two read-only probes added (`rug_point_count`, `rug_get_points`) so the test can read positions. It compares the cloth's vertex positions, not the rendered pixels, so the drop shadow cannot mask a physics change: without the sleep threshold every vertex must be bit-identical to the reference; with it, a rug resting on icon bumps must freeze within a tenth of a pixel of the range the reference still settles through.
+
+`tests\clickthrough-test` checks that dropping the overlay's click-through style makes the window hit-testable at once, which is what lets the first click on a sleeping rug land. `tests\restore-test` saves a drape, restores it onto a fresh start and checks the exact folds come back and rest on their bumps.
 
 ## Use
 
@@ -66,7 +68,7 @@ Five rugs: Persian, Neural with circuit-board ornaments, Soviet, Pixel and Turki
 - A transparent window sits above the desktop icons and below all other windows. It ignores the mouse everywhere except over the rug.
 - The icon positions come from the Shell's `IFolderView`, so every icon becomes a bump in the right place. Rug does not open Explorer's process or read its memory.
 - The cloth is a physics simulation with friction and self-collisions, so it folds and settles instead of stretching like rubber.
-- Once the cloth stops drifting it sleeps: its average pose over two seconds differs by less than 0.005 px from the two seconds before. Nothing is simulated or drawn until something touches it. The simulation never comes to a full stop and keeps trembling by a fraction of a pixel; the sleeping rug does not tremble, and its picture stays within 2 of 255 levels of the moving one. A moving rug sends only the part of the screen it changed to the compositor.
+- Once the cloth stops drifting it sleeps: its average pose over two seconds differs by less than 0.005 px from the two seconds before. Nothing is simulated or drawn until something touches it. The simulation never comes to a full stop and keeps trembling by a fraction of a pixel; the sleeping rug does not tremble, and its frozen vertices stay within a tenth of a pixel of where the moving one still settles. A moving rug sends only the part of the screen it changed to the compositor.
 - The rug is drawn with Direct3D 11, with soft shadows and the wool relief from the picture.
 - **Desktop floor** sets the wallpaper through `IDesktopWallpaper`, so Explorer stores the setting.
 
@@ -131,7 +133,9 @@ Derleme `Rug.exe` ile `rug_native.dll` dosyasını `Rug\bin\Release\net8.0-windo
 
 #### Testler
 
-`tests\native-equivalence\run.cmd <referans rug_native.dll>` komutu bu kodun `rug_native.dll` dosyasını derliyor. Sonra onu orijinal kodun bir derlemesiyle yan yana, aynı girdilerle çalıştırıyor. Uyku eşiği kapalıyken her kare bit bit aynı olmalı. Eşik açıkken ikon tümseklerinin üstünde duran halı, referansın kendi kareleri arasındaki farkı aşmamalı.
+`tests\native-equivalence\run.cmd <referans rug_native.dll>` komutu bu kodun `rug_native.dll` dosyasını derler. Sonra onu orijinal kodun bir derlemesiyle aynı girdilerle yan yana çalıştırır. Referans, orijinal koddur; konumları okumak için iki salt-okunur prob (`rug_point_count`, `rug_get_points`) eklenmiştir. Test, pikselleri değil kumaşın vertex konumlarını karşılaştırır. Böylece gölge, fizik değişikliğini gizleyemez. Uyku eşiği kapalıyken her vertex referansla bit bit aynı olmalı. Eşik açıkken ikon tümseklerinde duran halı, referansın oturduğu aralığın onda bir piksel içinde donmalı.
+
+`tests\clickthrough-test`, overlay'in click-through stilini kaldırınca pencerenin hemen hit-test edilebilir olduğunu kontrol eder. Bu, uyuyan halıya ilk tıklamanın işlemesini sağlar. `tests\restore-test`, bir drape kaydeder, taze başlangıçta geri yükler ve kırışıkların aynen dönüp tümseklerinde durduğunu kontrol eder.
 
 ### Kullanım
 
