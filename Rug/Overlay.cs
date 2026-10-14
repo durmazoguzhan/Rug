@@ -27,6 +27,7 @@ internal static class Overlay
     private const uint SWP_NOACTIVATE = 0x0010;
     private const int SW_SHOWNOACTIVATE = 4;
     private const uint ULW_ALPHA = 0x00000002;
+    private const uint GW_HWNDPREV = 3;
     private const uint PM_REMOVE = 0x0001;
     private const byte AC_SRC_OVER = 0x00;
     private const byte AC_SRC_ALPHA = 0x01;
@@ -50,6 +51,7 @@ internal static class Overlay
     private static IntPtr _host;
     private static float _rugScale = 0.46f;
     private static float[] _lastBumps = Array.Empty<float>();
+    private static float[] _sentBumps = Array.Empty<float>();
 
     public static Action<string>? Notifier;
 
@@ -60,7 +62,8 @@ internal static class Overlay
     [DllImport("rug_native.dll", CallingConvention = CallingConvention.Cdecl)] private static extern void rug_rebuild(float scale, float drop);
     [DllImport("rug_native.dll", CallingConvention = CallingConvention.Cdecl)] private static extern void rug_set_bumps(float[] data, int count);
     [DllImport("rug_native.dll", CallingConvention = CallingConvention.Cdecl)] private static extern void rug_step(float dt);
-    [DllImport("rug_native.dll", CallingConvention = CallingConvention.Cdecl)] private static extern void rug_render(IntPtr dst, int stride, int[] rect);
+    [DllImport("rug_native.dll", CallingConvention = CallingConvention.Cdecl)] private static extern int rug_render(IntPtr dst, int stride, int[] rect);
+    [DllImport("rug_native.dll", CallingConvention = CallingConvention.Cdecl)] private static extern void rug_invalidate();
     [DllImport("rug_native.dll", CallingConvention = CallingConvention.Cdecl)] private static extern int rug_mouse_down(float x, float y);
     [DllImport("rug_native.dll", CallingConvention = CallingConvention.Cdecl)] private static extern void rug_mouse_drag(float x, float y);
     [DllImport("rug_native.dll", CallingConvention = CallingConvention.Cdecl)] private static extern void rug_mouse_up();
@@ -102,9 +105,8 @@ internal static class Overlay
     [DllImport("user32.dll")] private static extern short GetAsyncKeyState(int vKey);
     [DllImport("user32.dll")] private static extern IntPtr GetDC(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr hWnd, IntPtr hdc);
-    [DllImport("user32.dll")] private static extern bool UpdateLayeredWindow(IntPtr hwnd, IntPtr hdcDst, ref POINT pptDst, ref SIZE psize,
-                                                                             IntPtr hdcSrc, ref POINT pptSrc, uint crKey,
-                                                                             ref BLENDFUNCTION pblend, uint dwFlags);
+    [DllImport("user32.dll")] private static extern bool UpdateLayeredWindowIndirect(IntPtr hwnd, ref UPDATELAYEREDWINDOWINFO info);
+    [DllImport("user32.dll")] private static extern IntPtr GetWindow(IntPtr hWnd, uint cmd);
     [DllImport("user32.dll")] private static extern bool PeekMessage(out MSG msg, IntPtr hWnd, uint filterMin, uint filterMax, uint remove);
     [DllImport("user32.dll")] private static extern bool TranslateMessage(ref MSG msg);
     [DllImport("user32.dll")] private static extern IntPtr DispatchMessage(ref MSG msg);
@@ -125,6 +127,16 @@ internal static class Overlay
     [StructLayout(LayoutKind.Sequential)] private struct BLENDFUNCTION
     {
         public byte BlendOp, BlendFlags, SourceConstantAlpha, AlphaFormat;
+    }
+    [StructLayout(LayoutKind.Sequential)] private struct RECT { public int left, top, right, bottom; }
+    [StructLayout(LayoutKind.Sequential)] private struct UPDATELAYEREDWINDOWINFO
+    {
+        public int cbSize;
+        public IntPtr hdcDst, pptDst, psize, hdcSrc, pptSrc;
+        public uint crKey;
+        public IntPtr pblend;
+        public uint dwFlags;
+        public IntPtr prcDirty;
     }
     [StructLayout(LayoutKind.Sequential)] private struct BITMAPINFOHEADER
     {
@@ -331,6 +343,26 @@ internal static class Overlay
             SourceConstantAlpha = 255,
             AlphaFormat = AC_SRC_ALPHA,
         };
+        IntPtr originPtr = Marshal.AllocHGlobal(Marshal.SizeOf<POINT>());
+        IntPtr sizePtr = Marshal.AllocHGlobal(Marshal.SizeOf<SIZE>());
+        IntPtr blendPtr = Marshal.AllocHGlobal(Marshal.SizeOf<BLENDFUNCTION>());
+        IntPtr dirtyPtr = Marshal.AllocHGlobal(Marshal.SizeOf<RECT>());
+        Marshal.StructureToPtr(origin, originPtr, false);
+        Marshal.StructureToPtr(size, sizePtr, false);
+        Marshal.StructureToPtr(blend, blendPtr, false);
+        var update = new UPDATELAYEREDWINDOWINFO
+        {
+            cbSize = Marshal.SizeOf<UPDATELAYEREDWINDOWINFO>(),
+            hdcDst = screenDc,
+            pptDst = originPtr,
+            psize = sizePtr,
+            hdcSrc = memDc,
+            pptSrc = originPtr,
+            pblend = blendPtr,
+            dwFlags = ULW_ALPHA,
+        };
+        bool presented = false;
+        bool handlesShown = false;
 
         var clock = Stopwatch.StartNew();
         double last = 0;
@@ -470,7 +502,8 @@ internal static class Overlay
             }
             wasDown = down;
 
-            SetWindowPos(hwnd, _host, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            if (GetWindow(hwnd, GW_HWNDPREV) != _host)
+                SetWindowPos(hwnd, _host, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 
             long nowMs = Environment.TickCount64;
             if (scanTask == null && !dragging && nowMs - lastIconScan > IconRefreshMs)
@@ -489,19 +522,43 @@ internal static class Overlay
             rug_step((float)(now - last));
             last = now;
 
-            rug_render(bits, width * 4, activeRect);
+            // The handles sit inside the rug's area, so a redraw of that area erases them.
+            if (!alt && handlesShown)
+            {
+                rug_invalidate();
+                handlesShown = false;
+            }
+            var dirty = new RECT();
+            if (rug_render(bits, width * 4, activeRect) != 0)
+                dirty = new RECT { left = activeRect[0], top = activeRect[1], right = activeRect[0] + activeRect[2], bottom = activeRect[1] + activeRect[3] };
+            bool drawn = dirty.right > dirty.left && dirty.bottom > dirty.top;
             if (alt)
             {
                 rug_get_corners(corners);
-                DrawCornerHandles(bits, width, height, corners);
+                if (drawn || !handlesShown)
+                {
+                    dirty = Union(dirty, DrawCornerHandles(bits, width, height, corners));
+                    handlesShown = true;
+                }
             }
 
-            UpdateLayeredWindow(hwnd, screenDc, ref origin, ref size, memDc, ref origin, 0, ref blend, ULW_ALPHA);
+            // Only pixels inside the dirty rectangle changed since the last update, so only those go to the compositor.
+            if (!presented || (dirty.right > dirty.left && dirty.bottom > dirty.top))
+            {
+                Marshal.StructureToPtr(dirty, dirtyPtr, false);
+                update.prcDirty = presented ? dirtyPtr : IntPtr.Zero;
+                UpdateLayeredWindowIndirect(hwnd, ref update);
+                presented = true;
+            }
 
             Thread.Sleep(FrameMs);
         }
 
         rug_shutdown();
+        Marshal.FreeHGlobal(originPtr);
+        Marshal.FreeHGlobal(sizePtr);
+        Marshal.FreeHGlobal(blendPtr);
+        Marshal.FreeHGlobal(dirtyPtr);
         SelectObject(memDc, oldBitmap);
         DeleteObject(dib);
         DeleteDC(memDc);
@@ -516,6 +573,9 @@ internal static class Overlay
     {
         _lastBumps = bumps;
         if (IconPile.HasHome) bumps = GroupPile(bumps);
+        // The same bumps again would only restart the ground animation from where it already is.
+        if (MemoryMarshal.AsBytes(bumps.AsSpan()).SequenceEqual(MemoryMarshal.AsBytes(_sentBumps.AsSpan()))) return;
+        _sentBumps = bumps;
         rug_set_bumps(bumps, bumps.Length / 5);
     }
 
@@ -577,10 +637,12 @@ internal static class Overlay
         return -1;
     }
 
-    private static void DrawCornerHandles(IntPtr bits, int width, int height, float[] corners)
+    // Returns the area it painted, clipped to the screen.
+    private static RECT DrawCornerHandles(IntPtr bits, int width, int height, float[] corners)
     {
         const int radius = 7;
         const int blue = unchecked((int)0xFF007AFF);
+        var painted = new RECT();
         for (int i = 0; i < 4; i++)
         {
             int cx = (int)MathF.Round(corners[i * 2]);
@@ -592,7 +654,29 @@ internal static class Overlay
                     if (x < 0 || y < 0 || x >= width || y >= height) continue;
                     Marshal.WriteInt32(bits, (y * width + x) * 4, blue);
                 }
+            var box = new RECT
+            {
+                left = Math.Max(0, cx - radius),
+                top = Math.Max(0, cy - radius),
+                right = Math.Min(width, cx + radius + 1),
+                bottom = Math.Min(height, cy + radius + 1),
+            };
+            painted = Union(painted, box);
         }
+        return painted;
+    }
+
+    private static RECT Union(RECT a, RECT b)
+    {
+        if (a.right <= a.left || a.bottom <= a.top) return b;
+        if (b.right <= b.left || b.bottom <= b.top) return a;
+        return new RECT
+        {
+            left = Math.Min(a.left, b.left),
+            top = Math.Min(a.top, b.top),
+            right = Math.Max(a.right, b.right),
+            bottom = Math.Max(a.bottom, b.bottom),
+        };
     }
 
     private static void SetClickThrough(IntPtr hwnd, bool through)
