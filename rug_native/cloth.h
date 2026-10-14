@@ -46,6 +46,8 @@ public:
     explicit HeightField(V2 size);
     void setBumps(const std::vector<Bump>& bumps);
     bool animate(float dt);
+    // Jump straight to the target heights, skipping the rise animation, so a restored drape sits on its bumps at once.
+    void snap();
     float sample(float x, float y) const;
 
 private:

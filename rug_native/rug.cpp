@@ -429,6 +429,9 @@ extern "C" void rug_set_bumps(const float* data, int count) {
     S.settled = false;
     S.windowSteps = 0;
     S.havePrevMean = false;
+    // Without this a cloth that has already drifted for kStuckWindows windows would freeze about one window
+    // after the icons move, mid-fall onto the new bumps, instead of draping over them.
+    S.awakeWindows = 0;
 }
 
 // Runs one Cloth::step and decides whether the cloth may sleep. RUG_EXACT_STEPS keeps only the bit-exact
@@ -443,7 +446,9 @@ static void StepCloth(float dt) {
     const bool posSame = SameBits(S.snapPos, c.pos);
     const bool unchanged = posSame && SameBits(S.snapPrev, c.prev) && SameBits(S.snapVel, c.vel) &&
                            std::memcmp(&speedBefore, &c.maxSpeed, sizeof(float)) == 0;
-    const bool free = !S.dragging && !c.isGrabbing();
+    // A held cloth is a bit-exact no-op every step (every invMass is 0), so it would otherwise count as settled
+    // and the overlay would save the flat lifted sheet as the drape. Keep it awake while held.
+    const bool free = !S.dragging && !c.isGrabbing() && !S.held;
     S.settled = unchanged && free;
     if (!posSame) S.derivedStale = true;
 
@@ -756,6 +761,10 @@ extern "C" int rug_get_points(float* out, int maxVertices) {
 
 extern "C" int rug_set_points(const float* in, int count) {
     if (!S.cloth || !in || count != S.cloth->count) return 0;
+    // A damaged drape must not poison the cloth: step()'s non-finite guard reads maxSpeed via std::max, which
+    // drops a NaN, so a NaN here would spread and never be caught. Reject the whole restore instead.
+    for (int i = 0; i < count * 3; ++i)
+        if (!std::isfinite(in[i])) return 0;
     for (int i = 0; i < count; ++i) {
         const V3 p{ in[i * 3 + 0], in[i * 3 + 1], in[i * 3 + 2] };
         S.cloth->pos[i] = p;
@@ -763,6 +772,9 @@ extern "C" int rug_set_points(const float* in, int count) {
         S.cloth->vel[i] = {};
         S.cloth->invMass[i] = 1.0f;
     }
+    // The caller sets the bumps just before restoring, but the height field rises to them over about 1.5 s. Snap
+    // it to the bumps now so the restored folds rest on them instead of slumping onto flat ground first.
+    if (S.field) S.field->snap();
     S.cloth->endGrab();
     S.dragging = false;
     S.held = false;

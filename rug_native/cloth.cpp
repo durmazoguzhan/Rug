@@ -65,6 +65,11 @@ bool HeightField::animate(float dt) {
     return true;
 }
 
+void HeightField::snap() {
+    data_ = target_;
+    animating_ = false;
+}
+
 float HeightField::sample(float x, float y) const {
     float fx = x / cell, fy = y / cell;
     if (fx < 0 || fy < 0) return 0;
