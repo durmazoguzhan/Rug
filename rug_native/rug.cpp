@@ -37,6 +37,10 @@ constexpr bool  kDesktopShadow = false;
 // from the window before it. Measured on eight drops: asleep after 8-28 s, each pose inside the original's tremble.
 constexpr int   kSleepWindow = 120;
 constexpr float kSleepDrift = 0.005f;
+// A corner balanced on a bump edge can creep for good: its window mean never settles below kSleepDrift. A drop
+// that is going to settle does so within 8-28 s (measured on eight drops), i.e. well under kStuckWindows windows,
+// so only a truly stuck cloth reaches this cap and is frozen at its mean to stop the tremble and let it sleep.
+constexpr int   kStuckWindows = 20;
 
 struct Vtx { float pos[3]; float nrm[3]; float uv[2]; };
 struct Cb {
@@ -105,6 +109,7 @@ struct State {
     bool frameDirty = true;
     std::vector<V3> snapPos, snapPrev, snapVel;
     int windowSteps = 0;
+    int awakeWindows = 0;
     bool havePrevMean = false;
     // Positions are summed relative to the window's first pose, so float sums of ~1000 px values keep their precision.
     std::vector<V3> windowStart, windowSum, prevMean;
@@ -123,6 +128,7 @@ V2 ToV2(float x, float y) { return { x, y }; }
 void Touch() {
     S.settled = false;
     S.windowSteps = 0;
+    S.awakeWindows = 0;
     S.havePrevMean = false;
     S.frameDirty = true;
 }
@@ -444,6 +450,7 @@ static void StepCloth(float dt) {
 #ifndef RUG_EXACT_STEPS
     if (S.settled || !free) {
         S.windowSteps = 0;
+        S.awakeWindows = 0;
         S.havePrevMean = false;
         return;
     }
@@ -454,7 +461,20 @@ static void StepCloth(float dt) {
     for (size_t i = 0; i < c.pos.size(); ++i) S.windowSum[i] += c.pos[i] - S.windowStart[i];
     if (++S.windowSteps == kSleepWindow) {
         S.windowSteps = 0;
-        S.settled = MeanStayedWithin(kSleepDrift);
+        if (MeanStayedWithin(kSleepDrift)) {
+            S.settled = true;
+            S.awakeWindows = 0;
+        } else if (++S.awakeWindows >= kStuckWindows) {
+            // Never reached a fixed point: freeze every vertex at the latest window mean so the tremble stops.
+            for (size_t i = 0; i < c.pos.size(); ++i) {
+                c.pos[i] = S.prevMean[i];
+                c.prev[i] = S.prevMean[i];
+                c.vel[i] = V3{};
+            }
+            S.settled = true;
+            S.awakeWindows = 0;
+            S.derivedStale = true;
+        }
     }
 #endif
 }
@@ -551,7 +571,9 @@ extern "C" int rug_render(unsigned char* dst, int stride, int* rect) {
         float lx = -0.5f, ly = 0.58f, lz = 0.64f;
         float l = std::sqrt(lx * lx + ly * ly + lz * lz);
         cb.lightDir[0] = lx / l; cb.lightDir[1] = ly / l; cb.lightDir[2] = lz / l; cb.lightDir[3] = 0.0f;
-        float sx = -0.3f, sy = 0.38f, sz = 0.87f;
+        // The shadow-casting light sits lower than the shading light (smaller z), so even a gentle bump over an
+        // icon throws a soft shadow and reads as relief away from the rug's edge, not only at the silhouette.
+        float sx = -0.3f, sy = 0.38f, sz = 0.55f;
         float s = std::sqrt(sx * sx + sy * sy + sz * sz);
         cb.lightK[0] = (sx / s) / (sz / s);
         cb.lightK[1] = (sy / s) / (sz / s);
@@ -716,6 +738,44 @@ extern "C" void rug_get_corners(float* out) {
     }
 }
 
+extern "C" int rug_point_count(void) {
+    return S.cloth ? S.cloth->count : 0;
+}
+
+extern "C" int rug_get_points(float* out, int maxVertices) {
+    if (!S.cloth || !out) return 0;
+    const int n = S.cloth->count;
+    if (maxVertices < n) return 0;
+    for (int i = 0; i < n; ++i) {
+        out[i * 3 + 0] = S.cloth->pos[i].x;
+        out[i * 3 + 1] = S.cloth->pos[i].y;
+        out[i * 3 + 2] = S.cloth->pos[i].z;
+    }
+    return n;
+}
+
+extern "C" int rug_set_points(const float* in, int count) {
+    if (!S.cloth || !in || count != S.cloth->count) return 0;
+    for (int i = 0; i < count; ++i) {
+        const V3 p{ in[i * 3 + 0], in[i * 3 + 1], in[i * 3 + 2] };
+        S.cloth->pos[i] = p;
+        S.cloth->prev[i] = p;   // prev == pos leaves the cloth at rest, so it holds the saved folds
+        S.cloth->vel[i] = {};
+        S.cloth->invMass[i] = 1.0f;
+    }
+    S.cloth->endGrab();
+    S.dragging = false;
+    S.held = false;
+    S.cloth->updateDerived(S.camera);
+    S.derivedStale = false;
+    Touch();
+    return 1;
+}
+
+extern "C" int rug_is_settled(void) {
+    return S.settled ? 1 : 0;
+}
+
 extern "C" void rug_resize(float scale) {
     if (!S.cloth) return;
     V2 pc{};
@@ -734,11 +794,8 @@ extern "C" void rug_resize(float scale) {
 extern "C" void rug_hold_begin(void) {
     if (!S.cloth) return;
     S.dragging = false;
-    S.cloth->layout(S.camera.center(), 0.0f, 60.0f * unitScale());
-    V2 pc{};
-    float pa = 0.0f;
-    S.cloth->pose(pc, pa);
-    S.cloth->layout(S.camera.center(), pa, 60.0f * unitScale());
+    // Lift the cloth straight up where it already sits, keeping its centre and angle. The old path re-laid it out
+    // at the screen centre first, so pressing Alt to resize snapped the rug back to a fresh centred drop.
     S.held = true;
     S.cloth->setHeld(true, liftH());
     S.cloth->updateDerived(S.camera);

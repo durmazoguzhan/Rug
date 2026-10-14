@@ -45,6 +45,16 @@ RUG_API void rug_hold_end(void);
 
 RUG_API void rug_layout(float cx, float cy, float angle, float drop);
 
+// The rug's exact draped shape. rug_point_count gives the vertex count; rug_get_points copies every vertex
+// position (3 floats each) into out when it holds at least maxVertices; rug_set_points puts a saved drape back
+// at rest, so the exact folds reappear without a fresh drop, and returns 0 if the vertex count differs.
+RUG_API int  rug_point_count(void);
+RUG_API int  rug_get_points(float* out, int maxVertices);
+RUG_API int  rug_set_points(const float* in, int count);
+
+// Non-zero once the cloth has come to rest, so a caller can snapshot the settled drape.
+RUG_API int  rug_is_settled(void);
+
 RUG_API void rug_shutdown(void);
 
 // Desktop icons through the Shell's IFolderView. Writes up to capacity x, y pairs (list view client
