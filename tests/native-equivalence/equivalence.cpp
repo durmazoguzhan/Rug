@@ -34,6 +34,11 @@ constexpr float kFrameSeconds = 1.0f / 32.0f;
 // outside the visited range. 0.1 world units (world units are screen pixels) is the accepted limit: ~25x the
 // largest overflow seen, still far below one pixel, so a real physics shift above a tenth of a pixel fails.
 constexpr float kPosSlack = 0.1f;
+// The candidate's frozen frame is only meaningfully "within the reference's range" if that range is itself tight,
+// i.e. the reference has all but stopped in the measured window. Measured 2026-10-14: the reference's spread over
+// the window reached 0.053 units, so 0.5 is a ~10x margin that still catches a reference creeping by units (which
+// would make kPosSlack meaningless and could hide a premature freeze).
+constexpr float kRefRestBound = 0.5f;
 
 struct Api {
     HMODULE module = nullptr;
@@ -110,6 +115,9 @@ int g_failures = 0;
 int g_frame = 0;
 bool g_bitExact = true;
 std::string g_phase;
+// The reference's vertex positions on the previous exact frame, to check the candidate redrew when they changed.
+bool g_prevRefValid = false;
+std::vector<float> g_prevRefPoints;
 
 void Fail(const char* what) {
     if (++g_failures <= 20) std::printf("MISMATCH frame %d (%s): %s\n", g_frame, g_phase.c_str(), what);
@@ -131,16 +139,29 @@ float MaxDiff(const std::vector<float>& a, const std::vector<float>& b) {
 void Frame(Side& ref, Side& cand, float cursorX, float cursorY) {
     ++g_frame;
     int rect[4];
+    bool candDrew = false;
     for (Side* s : { &ref, &cand }) {
         auto t0 = std::chrono::steady_clock::now();
         s->api.step(kFrameSeconds);
-        if (s->api.Render(s->pixels, rect)) ++s->drawn;
+        bool drew = s->api.Render(s->pixels, rect);
+        if (drew) ++s->drawn;
+        if (s == &cand) candDrew = drew;
         s->seconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     }
-    if (!g_bitExact) return;
+    if (!g_bitExact) { g_prevRefValid = false; return; }
     std::vector<float> pr = ref.api.Points(), pc = cand.api.Points();
     if (pr.size() != pc.size()) Fail("point count");
     else if (std::memcmp(pr.data(), pc.data(), pr.size() * sizeof(float)) != 0) Fail("point positions");
+    // A moving rug must redraw. The candidate's rug_render returns 0 only when nothing changed, so if the
+    // reference's vertices moved since the last frame, the candidate must have drawn this frame. This catches a
+    // mutating path that forgets to mark the frame dirty (the pixel compare used to catch it; the position
+    // compare would not).
+    if (g_prevRefValid && pr.size() == g_prevRefPoints.size()) {
+        bool refMoved = std::memcmp(pr.data(), g_prevRefPoints.data(), pr.size() * sizeof(float)) != 0;
+        if (refMoved && !candDrew) Fail("candidate did not redraw after the rug moved");
+    }
+    g_prevRefPoints = pr;
+    g_prevRefValid = true;
     float a[8], b[8];
     ref.api.get_pose(a); cand.api.get_pose(b); CompareFloats("pose", a, b, 3);
     ref.api.get_bounds(a); cand.api.get_bounds(b); CompareFloats("bounds", a, b, 4);
@@ -224,11 +245,13 @@ bool Rest(Side& ref, Side& cand, const char* name) {
     std::printf("  time per frame: reference %.2f ms, candidate %.3f ms\n", refSeconds * 1000 / measured, candSeconds * 1000 / measured);
     const bool asleep = lastDrawn < measureFrom;
     const bool within = beyond >= 0.0f && beyond <= kPosSlack;
+    const bool refRested = worstSpread <= kRefRestBound;
     if (!asleep) std::printf("FAIL: the candidate was still drawing during the measured window\n");
     if (beyond < 0.0f) std::printf("FAIL: the candidate and reference report a different vertex count\n");
     else if (!within) std::printf("FAIL: a frozen vertex is more than %.2f units outside what the reference showed\n", kPosSlack);
+    if (!refRested) std::printf("FAIL: the reference was still moving (spread %.4f > %.2f units) in the measured window, so its range is not a resting one\n", worstSpread, kRefRestBound);
     std::fflush(stdout);
-    return asleep && within;
+    return asleep && within && refRested;
 }
 
 int RestScenario(Side& ref, Side& cand) {
@@ -323,21 +346,39 @@ int wmain(int argc, wchar_t** argv) {
     // divergent step is the last one, and the in-place lift is asserted on its own rather than by comparison.
     g_phase = "alt hold";
     g_bitExact = false;
+    // Move the rug well off-centre and off-angle first. At the screen centre the in-place hold and the old
+    // re-centring hold look identical, so the check would pass either way; off-centre, a regression to re-centring
+    // moves the rug by hundreds of px and resets the angle, and the asserts below catch it.
+    cand.api.layout(kWidth / 2.0f + 400.0f, kHeight / 2.0f - 250.0f, 0.5f, 60.0f);
+    Idle(ref, cand, 30, "settle off-centre before hold");
     float beforeHold[3];
     cand.api.get_pose(beforeHold);
     cand.api.hold_begin();
     float held[3];
     cand.api.get_pose(held);
     float movedByHold = std::hypot(held[0] - beforeHold[0], held[1] - beforeHold[1]);
-    if (movedByHold > 5.0f) {
-        std::printf("MISMATCH: hold_begin moved the rug %.1f px instead of holding it in place\n", movedByHold);
+    float turnedByHold = std::fabs(held[2] - beforeHold[2]);
+    if (movedByHold > 5.0f || turnedByHold > 0.02f) {
+        std::printf("MISMATCH: hold_begin moved the rug %.1f px / %.3f rad instead of holding it in place\n", movedByHold, turnedByHold);
         ++g_failures;
     } else {
-        std::printf("alt hold kept the rug within %.2f px of where it sat\n", movedByHold);
+        std::printf("alt hold kept the rug within %.2f px and %.3f rad of where it sat\n", movedByHold, turnedByHold);
     }
     Idle(ref, cand, 40, "held");
+    // hold_end drops the lifted rug: it falls in z but its centre must stay put, not snap back to the middle.
+    float beforeEnd[3];
+    cand.api.get_pose(beforeEnd);
     cand.api.hold_end();
     Idle(ref, cand, 60, "after hold");
+    float afterEnd[3];
+    cand.api.get_pose(afterEnd);
+    float movedByEnd = std::hypot(afterEnd[0] - beforeEnd[0], afterEnd[1] - beforeEnd[1]);
+    if (movedByEnd > 60.0f) {
+        std::printf("MISMATCH: after hold_end the rug's centre moved %.1f px (it should settle near where it was held)\n", movedByEnd);
+        ++g_failures;
+    } else {
+        std::printf("hold_end dropped the rug within %.1f px of where it was held\n", movedByEnd);
+    }
 
     Both(ref, cand, [](Api& a) { a.shutdown(); });
     std::printf("frames %d, mismatches %d\n", g_frame, g_failures);

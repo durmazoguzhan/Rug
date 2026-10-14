@@ -43,9 +43,17 @@ int main() {
 
     int fail = 0;
     if (whileTransparent) { std::printf("UNEXPECTED: transparent window was hit-tested\n"); ++fail; }
-    if (!afterRemoveImmediate && !afterFrameChanged) { std::printf("FAIL: removing WS_EX_TRANSPARENT never took effect\n"); ++fail; }
-    std::printf("%s\n", afterRemoveImmediate ? "re-read-only fix is sufficient"
-                                             : (afterFrameChanged ? "need SWP_FRAMECHANGED too" : "neither worked"));
+    // The overlay (Overlay.cs SetClickThrough + the re-read right after it) relies on the removal taking effect
+    // immediately, without SWP_FRAMECHANGED. So the fix is sufficient only when afterRemoveImmediate holds; fail
+    // otherwise, even if SWP_FRAMECHANGED alone would have worked, because the shipped code does not call it.
+    if (!afterRemoveImmediate) {
+        std::printf("FAIL: re-reading WindowFromPoint after dropping WS_EX_TRANSPARENT did not take effect "
+                    "immediately (SWP_FRAMECHANGED would have worked: %d); the overlay's re-read-only fix cannot work\n",
+                    afterFrameChanged);
+        ++fail;
+    } else {
+        std::printf("re-read-only fix is sufficient\n");
+    }
     DestroyWindow(hwnd);
     return fail ? 1 : 0;
 }
