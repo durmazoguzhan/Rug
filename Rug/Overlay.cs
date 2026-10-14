@@ -27,6 +27,7 @@ internal static class Overlay
     private const uint SWP_NOACTIVATE = 0x0010;
     private const int SW_SHOWNOACTIVATE = 4;
     private const uint ULW_ALPHA = 0x00000002;
+    private const uint GW_HWNDNEXT = 2;
     private const uint GW_HWNDPREV = 3;
     private const uint PM_REMOVE = 0x0001;
     private const byte AC_SRC_OVER = 0x00;
@@ -377,6 +378,7 @@ internal static class Overlay
         float[] corners = new float[8];
         float[] pose = new float[3];
         bool dragging = false;
+        IntPtr zAbove = IntPtr.Zero, zBelow = IntPtr.Zero;
         long lastIconScan = 0;
         Task<float[]>? scanTask = null;
 
@@ -502,8 +504,15 @@ internal static class Overlay
             }
             wasDown = down;
 
-            if (GetWindow(hwnd, GW_HWNDPREV) != _host)
+            // Windows keeps the shell's desktop window at the bottom, so where SetWindowPos leaves the overlay differs
+            // between versions: on Windows 11 26200 it stays above Progman, never below it. The overlay is put back
+            // only when a window next to it changed since it was last put back.
+            if (GetWindow(hwnd, GW_HWNDPREV) != zAbove || GetWindow(hwnd, GW_HWNDNEXT) != zBelow)
+            {
                 SetWindowPos(hwnd, _host, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                zAbove = GetWindow(hwnd, GW_HWNDPREV);
+                zBelow = GetWindow(hwnd, GW_HWNDNEXT);
+            }
 
             long nowMs = Environment.TickCount64;
             if (scanTask == null && !dragging && nowMs - lastIconScan > IconRefreshMs)
