@@ -298,6 +298,14 @@ void Cloth::step(float frameDt) {
     hash_->create(pos, count);
     hash_->queryAll(pos, count, travel);
 
+    // rest[] is fixed for the whole step, so each pair's rest distance is computed once here instead of on every
+    // substep inside solveSelfCollisions (which runs 2 * substeps times).
+    int pairs = hash_->firstAdj[count];
+    if (int(selfRest2_.size()) < pairs) selfRest2_.resize(hash_->adj.size());
+    for (int i = 0; i < count; ++i)
+        for (int k = hash_->firstAdj[i]; k < hash_->firstAdj[i + 1]; ++k)
+            selfRest2_[k] = len2(rest[i] - rest[hash_->adj[k]]);
+
     for (int s = 0; s < n; ++s) {
         integrate(sdt, maxVel);
         moveGrabbed(sdt);
@@ -399,7 +407,7 @@ void Cloth::solveSelfCollisions() {
             V3 d = pos[j] - pos[i];
             float dist2 = len2(d);
             if (dist2 > t2 || dist2 == 0) continue;
-            float restDist2 = len2(rest[i] - rest[j]);
+            float restDist2 = selfRest2_[k];
             if (dist2 > restDist2) continue;
             float minDist = t;
             if (restDist2 < t2) minDist = std::sqrt(restDist2);

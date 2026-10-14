@@ -133,6 +133,8 @@ private:
     void solveSelfCollisions();
     void solveGround();
     std::vector<Con> cons_;
+    // len2(rest[i] - rest[j]) for each self-collision pair, filled once per step and read on every substep.
+    std::vector<float> selfRest2_;
     std::vector<int> grabbedIds_;
     std::vector<V3> grabOffsets_;
     std::vector<float> tetherRest_;
