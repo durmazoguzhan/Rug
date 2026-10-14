@@ -18,6 +18,8 @@ internal sealed class SettingsForm : Form
     private readonly TrackBar _size = new() { Minimum = 25, Maximum = 75, TickFrequency = 5, Width = 400 };
     private readonly Button _restoreFloor = new() { Text = "Restore previous wallpaper", AutoSize = true };
     private readonly Button _putBack = new() { Text = "Put them back", AutoSize = true };
+    private readonly CheckBox _startAtSignIn = new() { Text = "Start Rug when I sign in to Windows", AutoSize = true };
+    private bool _startupChanging;
 
     private readonly Dictionary<string, Image> _thumbs = new();
 
@@ -71,6 +73,12 @@ internal sealed class SettingsForm : Form
         root.Controls.Add(iconRow);
         root.Controls.Add(Note("If the icons snap back after a sweep, turn off Auto arrange: right-click an empty spot on the desktop, View, and clear \"Auto arrange icons\"."));
 
+        root.Controls.Add(Header("Startup"));
+        // Click, not CheckedChanged: Rebuild sets Checked from the registry, and only the user's click may write it.
+        _startAtSignIn.Click += async (_, _) => await ChangeStartup(_startAtSignIn.Checked);
+        root.Controls.Add(_startAtSignIn);
+        root.Controls.Add(Note("Rug then starts in the tray without opening this window. Task Manager lists it under Startup apps."));
+
         var actions = new FlowLayoutPanel { AutoSize = true, WrapContents = false };
         actions.Controls.Add(MakeButton("Drop again", (_, _) => Overlay.Redrop()));
         actions.Controls.Add(MakeButton("Center", (_, _) => Overlay.Center()));
@@ -120,7 +128,29 @@ internal sealed class SettingsForm : Form
         _size.Value = Math.Clamp((int)Math.Round(Overlay.CurrentScale * 100), _size.Minimum, _size.Maximum);
         _restoreFloor.Enabled = Wallpaper.CanRestore(_settings);
         _putBack.Enabled = IconPile.HasHome;
+        if (!_startupChanging)
+        {
+            _startAtSignIn.Checked = Autostart.IsOn();
+            _startAtSignIn.Enabled = Autostart.Available;
+        }
         FitHeight();
+    }
+
+    // The box shows what the registry holds after the write, not what was asked, so a change that Windows or
+    // security software refused is visible.
+    private async Task ChangeStartup(bool on)
+    {
+        _startupChanging = true;
+        _startAtSignIn.Enabled = false;
+        string? error = await Task.Run(() => Autostart.TrySet(on));
+        _startupChanging = false;
+        if (IsDisposed) return;
+        _startAtSignIn.Checked = Autostart.IsOn();
+        _startAtSignIn.Enabled = true;
+        if (error != null)
+            _tray.Warn("The startup setting could not be changed: " + error);
+        else if (_startAtSignIn.Checked != on)
+            _tray.Warn("Windows did not keep the startup setting. Security software may have blocked the change.");
     }
 
     private void FitHeight()

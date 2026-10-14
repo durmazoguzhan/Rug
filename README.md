@@ -50,6 +50,7 @@ The build puts `Rug.exe` and `rug_native.dll` in `Rug\bin\Release\net8.0-windows
 - Sweeping needs Explorer to stop arranging the icons by itself. Right-click an empty spot on the desktop, choose **View** and clear **Auto arrange icons**.
 - **Rug from your image…** turns any top-down picture into a rug. It looks best when the picture fills the whole frame.
 - **Desktop floor** changes the wallpaper. **Restore previous wallpaper** puts the old one back.
+- **Start Rug when I sign in to Windows** in the settings adds Rug to the Windows startup programs, which Task Manager lists under **Startup apps**. Rug then starts in the tray without opening the settings. Clearing the box removes the entry.
 - To quit, use **Quit Rug** in the tray menu. Starting Rug again while it is running just opens the settings.
 
 Outside the rug every click goes straight to the desktop.
@@ -72,6 +73,8 @@ Five rugs: Persian, Neural with circuit-board ornaments, Soviet, Pixel and Turki
 ## Security software
 
 `Rug.exe` is not signed and few people run it, so reputation checks may stop it the first time it starts. Trend Micro shows this as "Newly Encountered Program Detected". Choose **Allow Once**, or ask your IT team to allow the file.
+
+Security software may also ask before Rug adds itself to the startup programs, because malware uses the same place. Rug writes that entry only when you tick the box, and the box shows whether Windows kept it.
 
 ## Known limitations
 
@@ -140,6 +143,7 @@ Derleme `Rug.exe` ile `rug_native.dll` dosyasını `Rug\bin\Release\net8.0-windo
 - Süpürme için Explorer'ın simgeleri kendi kendine dizmesi kapalı olmalı. Masaüstünde boş bir yere sağ tıklayın, **Görünüm**'ü seçin ve **Simgeleri otomatik hizala** seçeneğini kaldırın.
 - **Rug from your image…** herhangi bir üstten çekilmiş resmi halıya çevirir. Resim tüm kareyi kapladığında en iyi görünür.
 - **Desktop floor** duvar kağıdını değiştirir. **Restore previous wallpaper** eskisini geri koyar.
+- Ayarlardaki **Start Rug when I sign in to Windows** kutusu Rug'ı Windows'un başlangıç programlarına ekler. Görev Yöneticisi onu **Başlangıç uygulamaları** altında gösterir. Rug açılışta ayar penceresini açmadan tepside başlar. Kutuyu kaldırırsanız kayıt silinir.
 - Çıkmak için tepsi menüsünden **Quit Rug**'ı seçin. Rug açıkken tekrar başlatmak sadece ayarları açar.
 
 Halının dışındaki tıklamalar doğrudan masaüstüne gider.
@@ -162,6 +166,8 @@ Beş halı: Persian, Neural (devre kartı süslemeli), Soviet, Pixel ve Turkish.
 ### Güvenlik yazılımları
 
 `Rug.exe` imzalı değil ve az kişi çalıştırıyor. Bu yüzden dosya itibarına bakan kontroller onu ilk açılışta durdurabiliyor. Trend Micro bunu "Newly Encountered Program Detected" uyarısıyla gösteriyor. **Allow Once**'ı seçin ya da IT ekibinizden dosyaya izin vermesini isteyin.
+
+Güvenlik yazılımı, Rug kendini başlangıç programlarına eklerken de onay isteyebilir. Zararlı yazılımlar da aynı yeri kullanıyor. Rug bu kaydı yalnızca kutuyu işaretlediğinizde yazıyor. Kutu, Windows'un kaydı tutup tutmadığını gösteriyor.
 
 ### Bilinen sınırlamalar
 
