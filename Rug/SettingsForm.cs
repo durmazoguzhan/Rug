@@ -191,13 +191,15 @@ internal sealed class SettingsForm : Form
         else dispose();
     }
 
-    // Only the decoding runs in parallel; the cache files are written one at a time.
+    // Decode one at a time: Assets.Thumbnail uses System.Drawing (GDI+), which is not safe to call from several
+    // threads at once and throws a sporadic "generic error" under concurrency. The cache files are written one at
+    // a time too.
     private void PrepareThumbnails(IEnumerable<string> paths)
     {
         string[] missing = paths.Distinct().Where(p => !_thumbs.ContainsKey(p)).ToArray();
         var made = new Bitmap[missing.Length];
         var fresh = new bool[missing.Length];
-        Parallel.For(0, missing.Length, i => made[i] = Assets.Thumbnail(missing[i], out fresh[i]));
+        for (int i = 0; i < missing.Length; i++) made[i] = Assets.Thumbnail(missing[i], out fresh[i]);
         for (int i = 0; i < missing.Length; i++)
         {
             if (fresh[i]) Assets.StoreThumbnail(missing[i], made[i]);

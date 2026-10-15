@@ -38,17 +38,26 @@ internal static class Wallpaper
 
         string? current = Current();
         bool alreadyOurs = current != null && current.StartsWith(WallpaperDir, StringComparison.OrdinalIgnoreCase);
+        string? prevWallpaper = null, prevStyle = null, prevTile = null;
         if (settings.PrevWallpaper == null && !alreadyOurs)
         {
             using var key = Registry.CurrentUser.OpenSubKey(DesktopKey);
-            settings.PrevWallpaper = current ?? "";
-            settings.PrevWallpaperStyle = key?.GetValue("WallpaperStyle")?.ToString() ?? "0";
-            settings.PrevTileWallpaper = key?.GetValue("TileWallpaper")?.ToString() ?? "0";
+            prevWallpaper = current ?? "";
+            prevStyle = key?.GetValue("WallpaperStyle")?.ToString() ?? "0";
+            prevTile = key?.GetValue("TileWallpaper")?.ToString() ?? "0";
         }
 
-        bool applied = DesktopShell.SetWallpaper(copy, DesktopShell.WallpaperPosition.Fill);
+        // Record the restore point and persist only after the change takes. Otherwise a rejected wallpaper would
+        // still leave CanRestore true, offering to restore a wallpaper that was never replaced.
+        if (!DesktopShell.SetWallpaper(copy, DesktopShell.WallpaperPosition.Fill))
+            throw new InvalidOperationException("Windows did not accept the new wallpaper.");
+        if (prevWallpaper != null)
+        {
+            settings.PrevWallpaper = prevWallpaper;
+            settings.PrevWallpaperStyle = prevStyle;
+            settings.PrevTileWallpaper = prevTile;
+        }
         settings.Save();
-        if (!applied) throw new InvalidOperationException("Windows did not accept the new wallpaper.");
     }
 
     public static bool CanRestore(AppSettings settings) => settings.PrevWallpaper != null;

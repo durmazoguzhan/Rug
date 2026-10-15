@@ -439,8 +439,9 @@ internal static class Overlay
         ApplyBumps(DesktopIcons.Scan(_host, width, height));
         // The drape was saved over these same icons, so restore it now that the ground is set. The count only
         // differs when the rug picture (its aspect) changed since; then the fresh drop above stands.
-        if (haveDrape && drapePoints.Length == rug_point_count() * 3)
-            rug_set_points(drapePoints, rug_point_count());
+        int drapeCount = rug_point_count();
+        if (haveDrape && drapePoints.Length == drapeCount * 3)
+            rug_set_points(drapePoints, drapeCount);
         _ready.Set();
 
         while (_running)

@@ -44,7 +44,7 @@ The build puts `Rug.exe` and `rug_native.dll` in `Rug\bin\Release\net8.0-windows
 
 ## Use
 
-- Drag the rug by any edge. Hold **Alt** to lift it flat in the air, and let go to drop it again.
+- Drag the rug by any edge to peek at the mess underneath.
 - Scroll over the rug to turn it. Hold **Alt** and scroll to resize it. While **Alt** is held, corner handles appear that you can drag to turn or resize the rug.
 - Right-click the tray icon (near the clock) for the quick menu. Double-click it to open the settings.
 - Settings has the rugs, the size, the desktop floors and the icon buttons. Closing the window keeps the rug on the desktop.
@@ -139,7 +139,7 @@ Derleme `Rug.exe` ile `rug_native.dll` dosyasını `Rug\bin\Release\net8.0-windo
 
 ### Kullanım
 
-- Halıyı herhangi bir kenarından sürükleyin. **Alt** tuşunu basılı tutarsanız halı havada düz kalkar, bırakınca tekrar iner.
+- Halıyı herhangi bir kenarından sürükleyip altındaki dağınıklığa bakın.
 - Halının üzerinde fareyi kaydırarak döndürün. **Alt** basılıyken kaydırarak boyutunu değiştirin. **Alt** basılıyken beliren köşe tutamaçlarını sürükleyerek de döndürüp boyutlandırabilirsiniz.
 - Saatin yanındaki tepsi simgesine sağ tıklayarak hızlı menüyü açın, çift tıklayarak ayarları açın.
 - Ayarlarda halılar, boyut, masaüstü zemini ve simge düğmeleri bulunur. Pencereyi kapatmak halıyı masaüstünde bırakır.
