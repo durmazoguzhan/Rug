@@ -72,9 +72,11 @@ void HeightField::snap() {
 
 float HeightField::sample(float x, float y) const {
     float fx = x / cell, fy = y / cell;
-    if (fx < 0 || fy < 0) return 0;
+    // Reject out of range as float, before the int cast: a huge finite coordinate (for example from a damaged
+    // restored drape) would overflow int(fx) to a negative index and slip past the bound checks, reading out of
+    // bounds. The !(fx >= 0) form also rejects a NaN that reached here.
+    if (!(fx >= 0) || !(fy >= 0) || fx >= float(w_ - 1) || fy >= float(h_ - 1)) return 0;
     int ix = int(fx), iy = int(fy);
-    if (ix >= w_ - 1 || iy >= h_ - 1) return 0;
     float tx = fx - ix, ty = fy - iy;
     size_t i = size_t(iy) * w_ + ix;
     float a = data_[i], b = data_[i + 1], c = data_[i + w_], d = data_[i + w_ + 1];
